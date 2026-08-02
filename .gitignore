@@ -1,0 +1,25 @@
+# Python / CircuitPython
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime artifacts from the Pico / local tests
+boot_out.txt
+test_output.txt
+
+# opencode tooling (personal config, not part of the firmware)
+.opencode/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDE
+.vscode/
+.idea/
