@@ -1,0 +1,34 @@
+# opencode tooling (personal config, not part of the firmware)
+.opencode/
+
+# Python / CircuitPython (retired build)
+__pycache__/
+*.pyc
+*.pyo
+boot_out.txt
+test_output.txt
+
+# C++ build artifacts (Pico SDK)
+build/
+*.uf2
+*.elf
+*.hex
+*.bin
+*.map
+
+# Pico SDK (external dependency, keep out of the repo)
+pico-sdk/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDE
+.vscode/
+.idea/

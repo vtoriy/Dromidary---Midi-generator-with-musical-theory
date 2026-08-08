@@ -1,0 +1,74 @@
+#pragma once
+
+#include "menu/menu_engine.hpp"
+#include "menu/renderer.hpp"
+#include "mode/mode_engine.hpp"
+#include "platform/display_sh1106.hpp"
+#include "platform/joystick.hpp"
+#include "platform/shift165.hpp"
+#include "platform/usb_midi.hpp"
+#include "state/state.hpp"
+
+namespace drom {
+
+class AppLoop {
+public:
+    void init();
+    [[noreturn]] void run();
+
+private:
+    void process_functional(uint32_t raw, uint32_t now_ms);
+    void process_notes(uint32_t raw, uint32_t now_ms);
+    void process_joystick(uint32_t raw, uint32_t now_ms);
+    bool is_pressed(uint32_t raw, uint8_t bit) const;
+    uint8_t button_to_note(uint8_t index) const;
+
+    void update_func(bool raw_bits[8], uint32_t now_ms);
+    bool fn_pressed(uint8_t bit) const;
+    bool fn_edge(uint8_t bit) const;
+    bool fn_fell(uint8_t bit) const;
+
+    AppState state_ {};
+    Shift165 shift_ {};
+    UsbMidi midi_ {};
+    Joystick joy_;
+    DisplaySh1106 display_ {};
+    ModeEngine mode_ {};
+    MenuEngine menu_ {};
+    MenuRenderer renderer_{&display_};
+
+    std::array<uint8_t, kMaxHeldKeys> note_debounce_ {};
+    std::array<bool, kMaxHeldKeys> key_state_ {};  // confirmed (debounced) state
+    std::array<bool, kMaxHeldKeys> note_held_ {};
+
+    // Debounced functional-button inputs. The debouncer operates on the raw
+    // 24-bit read: it keeps per-chip3-bit start timestamps (index 0..7 = raw
+    // bits 16..23) and stores the confirmed image as a copy of the raw word
+    // with only those functional bits updated. fn_pressed/fn_edge take RAW bit
+    // indices (16..23), exactly like the note keys use raw bits 0..15.
+    std::array<uint32_t, 8> func_pending_start_ {};
+    uint32_t func_stable_ {0};
+    uint32_t func_prev_ {0};
+    PlayMode last_mode_ {PlayMode::MidiKeyboard};
+    bool last_test_mode_ {false};
+    uint32_t last_raw_ {0};  // previous 24-bit read, for the activity LED
+
+    // Last value persisted to flash (for debounced ClickSettings saves).
+    ClickSettings saved_click_ {};
+    uint32_t last_persist_edit_ms_ {0};  // wall-clock anchor for the save debounce;
+
+    uint32_t last_joy_tilt_ms_ {0};
+    Direction last_joy_dir_ {Direction::Center};
+    bool joy_btn_prev_ {false};
+    uint32_t joy_btn_press_ms_ {0};
+    uint32_t joy_btn_last_click_ms_ {0};
+    bool joy_btn_long_ {false};
+    uint8_t joy_btn_debounce_ {0};
+    bool joy_btn_stable_ {false};
+
+    uint32_t last_flush_ms_ {0};
+    uint32_t last_anim_ms_ {0};
+    bool ui_dirty_ {true};
+};
+
+}  // namespace drom

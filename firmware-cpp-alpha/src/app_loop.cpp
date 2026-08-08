@@ -1,0 +1,425 @@
+#include "app_loop.hpp"
+
+#include <cstring>
+
+#include "pico/stdlib.h"
+#include "tusb.h"
+
+#include "persist.hpp"
+#include "platform/board_pins.hpp"
+
+namespace drom {
+
+namespace {
+
+constexpr uint8_t kMidiOctaveOffset = 2;
+constexpr uint8_t kKeyDebounce = 5;
+constexpr uint32_t kJoyRepeatMs = 220;
+constexpr uint32_t kFlushMs = 40;
+constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
+constexpr uint32_t kPersistSaveDelayMs = 500; // wait 0.5s of no edits before flashing
+
+// Functional buttons are on chip3, whose 8 bits are the HIGH byte of the
+// 24-bit shift read (raw bits 16..23). These constants are RAW bit indices —
+// the same convention the note keys use (raw bits 0..15) — so the whole input
+// layer shares one pinout numbering. Actual wiring (confirmed on the 74HC165):
+//   chip3 bit0(Play) bit1(Rest) bit2(Rec) bit3(Shift) bit4(unused) bit5(unused) bit6(OctUp "+") bit7(OctDown "-")
+constexpr uint8_t kBtnPlay = 16;     // chip3 bit0
+constexpr uint8_t kBtnRest = 17;     // chip3 bit1
+constexpr uint8_t kBtnRec = 18;      // chip3 bit2
+constexpr uint8_t kBtnShift = 19;    // chip3 bit3
+constexpr uint8_t kBtnOctUp = 22;    // chip3 bit6 ("+")
+constexpr uint8_t kBtnOctDown = 23;  // chip3 bit7 ("-")
+
+}  // namespace
+
+void AppLoop::init() {
+    stdio_init_all();
+    init_default_state(state_);
+    persist_load_click(state_.runtime.click);
+    saved_click_ = state_.runtime.click;
+    shift_.init();
+    midi_.init();
+    display_.init();
+    joy_.init();
+    mode_.init(&midi_, &state_);
+    menu_.init(&state_);
+
+    gpio_init(BoardPins::kLed);
+    gpio_set_dir(BoardPins::kLed, GPIO_OUT);
+    gpio_put(BoardPins::kLed, false);
+}
+
+bool AppLoop::is_pressed(uint32_t raw, uint8_t bit) const {
+    return ((raw >> bit) & 1u) == 0u;
+}
+
+uint8_t AppLoop::button_to_note(uint8_t index) const {
+    // Buttons 1-12 = C..B of the current octave; buttons 13-16 continue the
+    // keyboard one octave up (C, C#, D, D#), per the documented layout.
+    uint8_t octave = state_.runtime.base_octave + kMidiOctaveOffset;
+    if (index >= 12) {
+        ++octave;
+    }
+    return static_cast<uint8_t>(octave * 12 + (index % 12));
+}
+
+void AppLoop::update_func(bool raw_bits[8], uint32_t now_ms) {
+    // Independently debounce each functional button by wall-clock time: the
+    // confirmed state only flips after the raw input has held the new value for
+    // the configured debounce window. A bounce that re-reads the old value
+    // resets the pending timer, so one physical click yields exactly one edge
+    // regardless of how the switch rings. raw_bits[i] is the already-inverted
+    // raw read for chip3 bit i (bit i = raw bit 16+i).
+    const uint32_t debounce_ms = state_.runtime.click.debounce_ms;
+    uint32_t bits = func_stable_;
+    for (int i = 0; i < 8; ++i) {
+        const bool pressed = raw_bits[i];
+        const uint32_t bit = 16u + static_cast<uint32_t>(i);
+        const bool cur = (func_stable_ >> bit) & 1u;
+        if (pressed != cur) {
+            if (func_pending_start_[i] == 0u) {
+                func_pending_start_[i] = now_ms;
+            } else if ((now_ms - func_pending_start_[i]) >= debounce_ms) {
+                func_pending_start_[i] = 0;
+                if (pressed) {
+                    bits |= 1u << bit;
+                } else {
+                    bits &= ~(1u << bit);
+                }
+            }
+        } else {
+            func_pending_start_[i] = 0;
+        }
+    }
+    func_prev_ = func_stable_;
+    func_stable_ = bits;
+}
+
+bool AppLoop::fn_pressed(uint8_t bit) const {
+    return (func_stable_ >> bit) & 1u;
+}
+
+bool AppLoop::fn_edge(uint8_t bit) const {
+    return fn_pressed(bit) && !((func_prev_ >> bit) & 1u);
+}
+
+bool AppLoop::fn_fell(uint8_t bit) const {
+    return !fn_pressed(bit) && ((func_prev_ >> bit) & 1u);
+}
+
+void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
+    auto& runtime = state_.runtime;
+
+    // Feed the debouncer with the raw functional-button bits (chip3).
+    bool raw_bits[8];
+    for (int i = 0; i < 8; ++i) {
+        raw_bits[i] = is_pressed(raw, 16u + static_cast<uint8_t>(i));
+    }
+    update_func(raw_bits, now_ms);
+
+    // Functional buttons are also exposed as MIDI CC so a DAW can assign them
+    // as control buttons (press = 127, release = 0). Guarded by test mode:
+    // there the flat channel must stay silent so the tester sees only the
+    // raw signal changes. Otherwise, the sender calls on fn_edge/fn_fell.
+    if (!runtime.test_mode) {
+        // [Play/Rest/Rec/Shift]/[Oct+/Oct-] -> a narrow set of CC numbers.
+        constexpr uint8_t kCcChan = 15;  // 0-based MIDI channel 16 (away from notes)
+        constexpr uint8_t kPlayCc = 20;
+        constexpr uint8_t kRestCc = 21;
+        constexpr uint8_t kRecCc = 22;
+        constexpr uint8_t kShiftCc = 23;
+        constexpr uint8_t kOctUpCc = 24;
+        constexpr uint8_t kOctDnCc = 25;
+        if (fn_edge(kBtnPlay)) { midi_.cc(kCcChan, kPlayCc, 127); }
+        if (fn_fell(kBtnPlay)) { midi_.cc(kCcChan, kPlayCc, 0); }
+        if (fn_edge(kBtnRest)) { midi_.cc(kCcChan, kRestCc, 127); }
+        if (fn_fell(kBtnRest)) { midi_.cc(kCcChan, kRestCc, 0); }
+        if (fn_edge(kBtnRec)) { midi_.cc(kCcChan, kRecCc, 127); }
+        if (fn_fell(kBtnRec)) { midi_.cc(kCcChan, kRecCc, 0); }
+        if (fn_edge(kBtnShift)) { midi_.cc(kCcChan, kShiftCc, 127); }
+        if (fn_fell(kBtnShift)) { midi_.cc(kCcChan, kShiftCc, 0); }
+        if (fn_edge(kBtnOctUp)) { midi_.cc(kCcChan, kOctUpCc, 127); }
+        if (fn_fell(kBtnOctUp)) { midi_.cc(kCcChan, kOctUpCc, 0); }
+        if (fn_edge(kBtnOctDown)) { midi_.cc(kCcChan, kOctDnCc, 127); }
+        if (fn_fell(kBtnOctDown)) { midi_.cc(kCcChan, kOctDnCc, 0); }
+    }
+
+    // Diagnostic: mirror the CONFIRMED (debounced) chip3 image to the status
+    // strip. It only changes when a key really settles, so bounces and
+    // crosstalk never flicker the readout.
+    const uint8_t diag = static_cast<uint8_t>((func_stable_ >> 16u) & 0xFFu);
+    if (diag != runtime.func_bits) {
+        runtime.func_bits = diag;
+        ui_dirty_ = true;
+    }
+
+    // In test mode the buttons are watched, not acted upon: playing a key must
+    // not start/stop transport or move the octave while the tester inspects the
+    // raw signals.
+    if (runtime.test_mode) {
+        return;
+    }
+
+    const bool shift_held = fn_pressed(kBtnShift);
+    const bool rest_held = fn_pressed(kBtnRest);
+
+    // Octave up/down: a single confirmed press moves one step. The min/max
+    // bounds (0..8 plus the +2 MIDI offset) keep the keyboard inside MIDI.
+    if (fn_edge(kBtnOctUp) && runtime.base_octave < 8) {
+        ++runtime.base_octave;
+        ui_dirty_ = true;
+    }
+    if (fn_edge(kBtnOctDown) && runtime.base_octave > 0) {
+        --runtime.base_octave;
+        ui_dirty_ = true;
+    }
+
+    // Play: debounced toggle. Single press -> single state flip regardless of
+    // contact bounce; also starts/stops the continuous RandomNote generation.
+    // In RandomNote a loop can be started by a first key press, so Play acts as
+    // stop-if-running / start-if-stopped rather than a pure `playing` toggle,
+    // otherwise the first Play press would re-anchor instead of stopping.
+    if (fn_edge(kBtnPlay)) {
+        runtime.playing = !runtime.playing;
+        if (runtime.mode == PlayMode::RandomNote) {
+            if (mode_.random_loop_running()) {
+                runtime.playing = false;
+                mode_.random_loop_stop();
+            } else {
+                runtime.playing = true;
+                // Anchor on the current keyboard octave (C of that octave).
+                const uint8_t anchor = static_cast<uint8_t>(
+                    (runtime.base_octave + kMidiOctaveOffset) * 12);
+                mode_.random_loop_start(anchor, now_ms);
+            }
+        }
+        ui_dirty_ = true;
+    }
+
+    if (fn_edge(kBtnRec)) {
+        runtime.recording = !runtime.recording;
+        ui_dirty_ = true;
+    }
+
+    // Live-mute is a "hold Rest while playing" behaviour: the output is muted
+    // for as long as the button is held, and released immediately after.
+    runtime.live_mute = rest_held;
+
+    const bool rest_click = fn_edge(kBtnRest);
+    if (rest_click && shift_held) {
+        menu_.reset_value();
+        ui_dirty_ = true;
+    }
+}
+
+void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
+    for (uint8_t i = 0; i < kKeyCount; ++i) {
+        const bool pressed = is_pressed(raw, i);
+        // Per-key debounce: the confirmed state only flips after the raw
+        // input has stayed at the new value for kKeyDebounce frames. The old
+        // code compared against previous_raw_ (updated every frame), so the
+        // counter could only ever fire during switch bounce and a clean
+        // release was missed, leaving notes stuck on.
+        if (pressed == key_state_[i]) {
+            note_debounce_[i] = 0;
+            continue;
+        }
+        ++note_debounce_[i];
+        if (note_debounce_[i] < kKeyDebounce) {
+            continue;
+        }
+        note_debounce_[i] = 0;
+        key_state_[i] = pressed;
+
+        if (pressed) {
+            if (!note_held_[i]) {
+                note_held_[i] = true;
+                if (!state_.runtime.test_mode) {
+                    mode_.note_on(i, button_to_note(i), now_ms);
+                }
+                ui_dirty_ = true;
+            }
+        } else {
+            if (note_held_[i]) {
+                note_held_[i] = false;
+                if (!state_.runtime.test_mode) {
+                    mode_.note_off(i, now_ms);
+                }
+                ui_dirty_ = true;
+            }
+        }
+    }
+}
+
+void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
+    joy_.poll();
+
+    // Debounce the joystick button the same way as the note/function keys: the
+    // stable state only flips after the raw input holds for kKeyDebounce frames.
+    const bool raw_btn = joy_.button();
+    if (raw_btn == joy_btn_stable_) {
+        joy_btn_debounce_ = 0;
+    } else {
+        ++joy_btn_debounce_;
+        if (joy_btn_debounce_ >= kKeyDebounce) {
+            joy_btn_debounce_ = 0;
+            joy_btn_stable_ = raw_btn;
+        }
+    }
+    const bool btn = joy_btn_stable_;
+
+    // In test mode the joystick does two things only: Shift+one click exits the
+    // test screen back to the FULL menu. Everything else (navigation, radial
+    // zones, long-press screen switch) is suppressed.
+    if (state_.runtime.test_mode) {
+        if (btn && !joy_btn_prev_) {
+            joy_btn_press_ms_ = now_ms;
+            joy_btn_long_ = false;
+        }
+        if (!btn && joy_btn_prev_ && !joy_btn_long_ && fn_pressed(kBtnShift)) {
+            state_.runtime.test_mode = false;
+            mode_.all_notes_off();
+            menu_.rebuild();
+            ui_dirty_ = true;
+        }
+        joy_btn_prev_ = btn;
+        return;
+    }
+
+    if (btn && !joy_btn_prev_) {
+        joy_btn_press_ms_ = now_ms;
+        joy_btn_long_ = false;
+    }
+    if (btn && !joy_btn_long_ && (now_ms - joy_btn_press_ms_) >= state_.runtime.click.long_ms) {
+        joy_btn_long_ = true;
+        menu_.press_long();
+        ui_dirty_ = true;
+        mode_.on_arp_config_changed(now_ms);
+    }
+    if (!btn && joy_btn_prev_) {
+        if (!joy_btn_long_) {
+            // Rest + click resets the current value (QUICK cell or DETAIL/MAIN
+            // item) to its last accepted value. Otherwise a double-click in
+            // DETAIL/MAIN is the alternative reset, and a plain click is a
+            // normal confirm/edit action.
+            if (fn_pressed(kBtnRest)) {
+                menu_.reset_value();
+            } else if (menu_.editing_value_item() &&
+                       (now_ms - joy_btn_last_click_ms_) < state_.runtime.click.double_ms) {
+                menu_.reset_value();
+            } else {
+                menu_.press_short();
+            }
+            joy_btn_last_click_ms_ = now_ms;
+            ui_dirty_ = true;
+            mode_.on_arp_config_changed(now_ms);
+        }
+        joy_btn_long_ = false;
+    }
+    joy_btn_prev_ = btn;
+
+    const Direction dir = joy_.direction();
+    if (dir != Direction::Center) {
+        if (dir != last_joy_dir_) {
+            last_joy_dir_ = dir;
+            last_joy_tilt_ms_ = 0;
+        }
+        if ((now_ms - last_joy_tilt_ms_) >= kJoyRepeatMs) {
+            last_joy_tilt_ms_ = now_ms;
+            const bool shift = fn_pressed(kBtnShift);
+            if (menu_.editing_radial()) {
+                menu_.radial_select(direction_to_zone(dir));
+            } else {
+                menu_.tilt(dir, shift);
+            }
+            ui_dirty_ = true;
+            mode_.on_arp_config_changed(now_ms);
+        }
+    } else {
+        last_joy_dir_ = Direction::Center;
+    }
+}
+
+[[noreturn]] void AppLoop::run() {
+    while (true) {
+        tud_task();
+        const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+        const uint32_t raw = shift_.read_all();
+
+        process_functional(raw, now_ms);
+        process_notes(raw, now_ms);
+        process_joystick(raw, now_ms);
+
+        // Raw note-key image for the test screen: bit i = key i pressed.
+        state_.runtime.note_bits = static_cast<uint16_t>(~raw & 0xFFFFu);
+
+        // Test screen watch: draw regardless of menu motion.
+        if (state_.runtime.test_mode != last_test_mode_) {
+            menu_.rebuild();
+            last_test_mode_ = state_.runtime.test_mode;
+            if (state_.runtime.test_mode) {
+                mode_.all_notes_off();
+            }
+            ui_dirty_ = true;
+        }
+
+        // Persist ClickSettings changes to flash a moment after the last edit.
+        const ClickSettings& c = state_.runtime.click;
+        if (c.debounce_ms != saved_click_.debounce_ms ||
+            c.double_ms != saved_click_.double_ms ||
+            c.long_ms != saved_click_.long_ms) {
+            if ((now_ms - last_persist_edit_ms_) >= kPersistSaveDelayMs) {
+                persist_save_click(c);
+                saved_click_ = c;
+                last_persist_edit_ms_ = now_ms;
+            }
+        } else {
+            last_persist_edit_ms_ = now_ms;
+        }
+
+        // Activity LED: lit while any physical input differs from the previous
+        // sampled 24-bit image (any pressed or released key/function button).
+        // The non-connected chip3 bits 4-5 float, so they are masked out to avoid the
+        // LED strobing from mere electrical noise.
+        constexpr uint32_t kUnusedMask = 0x00300000u;  // raw bits 20,21
+        const uint32_t raw_masked = raw & ~kUnusedMask;
+        const bool joy_motion = joy_.direction() != Direction::Center;
+        const bool activity = (raw_masked != (last_raw_ & ~kUnusedMask)) ||
+                              joy_motion || joy_.button();
+        gpio_put(BoardPins::kLed, activity);
+        last_raw_ = raw;
+
+        mode_.tick(now_ms);
+
+        // The QUICK row set depends on the play mode; when it changes (via the
+        // Mode cell) rebuild the menu and silence anything still sounding.
+        if (state_.runtime.mode != last_mode_) {
+            mode_.all_notes_off();
+            mode_.random_loop_stop();
+            menu_.rebuild();
+            last_mode_ = state_.runtime.mode;
+            ui_dirty_ = true;
+        }
+
+        // Keep the Animation screen advancing at 12 FPS even when no input.
+        if (state_.runtime.screen_mode == ScreenMode::Animation &&
+            (now_ms - last_anim_ms_) >= kAnimFrameMs) {
+            last_anim_ms_ = now_ms;
+            ui_dirty_ = true;
+        }
+        if (ui_dirty_) {
+            renderer_.render(state_, menu_);
+            ui_dirty_ = false;
+        }
+        if ((now_ms - last_flush_ms_) >= kFlushMs) {
+            display_.flush();
+            last_flush_ms_ = now_ms;
+        }
+
+        sleep_ms(1);
+    }
+}
+
+}  // namespace drom
