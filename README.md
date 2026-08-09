@@ -23,7 +23,7 @@
 |---|---|---|
 | 🎼 | **Key / Scale Quantizer** | 16 ладов; «неправильные» ноты: snap-up, snap-down или mute |
 | 🎹 | **Chord Builder** | 26 типов аккордов (triads, 7th, sus, altered, quartal/quintal, cluster, power) |
-| 🔁 | **Arpeggiator** | 19 стилей (Up/Down, UpDown/DownUp, Up&Dn/Dn&Up, Converge/Diverge/Con&Div, Pinky/Thumb-педали, As Played, Chord Trigger, Random/Random Once/Random Other, Off), rate в нотах (1/64–1/1, включая триоли) или мс, range = шаг позиций (полутоны), keys = колонки клавиатуры, steps = длина цикла, **latch** |
+| 🔁 | **Arpeggiator** | 19 стилей (Up/Down, UpDown/DownUp, Up&Dn/Dn&Up, Converge/Diverge/Con&Div, Pinky/Thumb-педали, As Played, Chord Trigger, Random/Random Once/Random Other, Off), rate в нотах (1/64–1/1, включая триоли) или мс (Free); **Distance** = шаг транспонирования (полутоны), **Steps** = доп. транспозиции, **Cycle** = длина цикла, фильтр по тональности, **latch** |
 | 🎵 | **RandomNote** | Непрерывная генерация случайных нот вокруг якоря клавиши/Play, с фильтром в тональность |
 | 🎚️ | **Полифонический live-арпеджио** | Все зажатые клавиши объединяются в один аккорд → единый арп-цикл |
 | ⬆️ | **Transpose / Octave** | Полутоны и октавы (до Key Filter); базовая октава клавиатуры 1–8 |

@@ -47,7 +47,7 @@ secondary filter → (арпеджио, если включён). Полифон
 | Key Filter (Root/Scale/Snap) | Quick: Key/Scale; Full: Key / Scale | фильтр сгенерированной ноты в лад |
 | Dens (Density) | Quick: Dens; Full: Randomize → Density | зарезервирован (в alpha поток непрерывный) |
 | Shape | Quick: Shape; Full: Randomize → Shape | зарезервирован |
-| BPM / Arp Rate | Full: Pattern → BPM; Arpeggiator → Rate | темп следования нот |
+| BPM / Arp Rate | Full: Timing → BPM; Arpeggiator → Rate | темп следования нот |
 
 > В alpha RandomNote использует только часть `random_cfg` (якорь + фильтр + темп).
 > Полный набор параметров случайности (длины, диапазоны, velocity) отложен — см.

@@ -19,7 +19,7 @@ void init_default_state(AppState& state) {
     for (auto& slot : state.slots) {
         slot = {};
         slot.length = 16;
-        slot.bpm = 120;
+        slot.timing.bpm = 120;
         for (auto& step : slot.steps) {
             step = make_empty_step();
         }

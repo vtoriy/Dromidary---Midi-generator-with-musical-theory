@@ -27,7 +27,7 @@ DETAIL и MAIN используют общую модель «список па�
 | Rest + клик джойстика | Сброс значения к снимку (в любом меню) |
 | Двойной клик (~double_ms, 300 мс) | Сброс в DETAIL/MAIN (доп. к Rest+клик) |
 | Shift + наклон | Прыжок к крайнему значению (min/max) |
-| Удержание джойстика в направлении | Авто-повтор (навигация/ввод) с интервалом ~220 мс |
+| Удержание джойстика в направлении | Авто-повтор с ускорением: ~220 мс → 150 → 110 → 60 мс, на 3-м уровне по 3 шага за тик (`app_loop.cpp`) |
 
 Тайминги кликов настраиваются: System → Debounce / Click 2x / Click Lng
 (см. `03-data-structures.md`, ClickSettings) и сохраняются во flash.
@@ -69,6 +69,7 @@ Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN ест
 | **Key** | Linear `Key` (12 нот) + Radial `Scale` + `PRM` | Scale — зоны, Key — линейный (только выбираемая нота) |
 | **CHD** (только KB/RND/MidiFilter) | Radial `CType` + Radial `Strum` + `PRM` | порох, блок аккордов |
 | **Arp** (только KB/MidiFilter) | Radial `AStyle` + Toggle `Latch` + `PRM` | арпеджиатор |
+| **Time** (всегда) | Radial `Swing` + Radial `Quant` + `PRM` | тайминг, влияет на арп; PRM → BPM/Swing/Human/Quant/legato |
 | **ADR** (всегда) | сводка On/Off, клик → DETAIL | блок ADSR: Switch, Atk, Dec, Sus, Rel, Sync |
 | **Dens** (только RND) | Linear `Dens` (0..100) | плотность/вероятность |
 | **Shape** (только RND) | Linear `Shape` (Asc/Desc/Arch/Rnd) | форма |
@@ -90,8 +91,7 @@ Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN ест
 Main
 ├── Pattern
 │   ├── Slot            (0–15)
-│   ├── Length          (16 / 32 / 48 / 64)
-│   └── BPM             (20–300)
+│   └── Length          (16 / 32 / 48 / 64)
 ├── Key / Scale
 │   ├── Key Filter      (On / Off)
 │   ├── Root Note       (C..B, 12 нот)
@@ -108,12 +108,16 @@ Main
 ├── Arpeggiator
 │   ├── Arp             (On / Off)
 │   ├── Latch           (On / Off)
-│   ├── Style           (полные 8: Off, Up, Down, UpDn, DnUp, Play, Rnd, CvDv)
-│   ├── RateMode        (Note / Ms)
-│   ├── Rate            (Note: 1/64..1/1; Ms: 10–2000 мс шаг 10)
-│   ├── Range           (0–48 полутонов)
-│   └── Steps           (1–32)
+│   ├── Style           (полные 19: Off, Up, Down, UpDn, DnUp, Up&Dn, Dn&Up,
+│   │                    Converge, Diverge, C&Div, PinkUp, PinkDn, ThmbUp,
+│   │                    ThmbUD, PlayOrd, Chord, Rnd, Rnd1, RndO)
+│   ├── RateMode        (Note / Free)
+│   ├── Rate            (Note: 1/64..1/1 все, включая триоли; Free: 10–2000 мс шаг 10)
+│   ├── Distance        (0–48 полутонов; шаг транспонирования, 12 = октава)
+│   ├── Steps           (0–16 доп. транспозиций; позиций = Steps+1)
+│   └── Cycle           (1–32 шагов)
 ├── Timing
+│   ├── BPM             (20–300)
 │   ├── Swing           (0–100%)
 │   ├── Humanize        (0–50 мс)
 │   ├── Quantize        (Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4)

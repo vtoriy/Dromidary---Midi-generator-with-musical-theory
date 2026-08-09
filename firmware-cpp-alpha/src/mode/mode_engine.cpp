@@ -123,7 +123,7 @@ void ModeEngine::stop_arp() {
 
 void ModeEngine::schedule_next_step(uint32_t now_ms) {
     const Pattern& p = state_->active_pattern();
-    const uint16_t interval = arp_interval_ms(p.arp, p.bpm);
+    const uint16_t interval = arp_interval_ms(p.arp, p.timing.bpm);
     // Align the restart to the next step boundary of the arp grid (a multiple
     // of the selected quantization), so the rhythm stays locked to the beat.
     const uint32_t t0 = (last_step_ms_ != 0) ? last_step_ms_ : now_ms;
@@ -140,7 +140,7 @@ void ModeEngine::advance_arp(uint32_t now_ms) {
         return;
     }
     const Pattern& p = state_->active_pattern();
-    const uint16_t interval = arp_interval_ms(p.arp, p.bpm);
+    const uint16_t interval = arp_interval_ms(p.arp, p.timing.bpm);
     const uint32_t attack = gate_attack_ms();
     const uint32_t release = gate_release_ms();
     const bool legato = p.timing.legato;
@@ -183,9 +183,9 @@ uint32_t ModeEngine::arp_fingerprint() const {
     h = fp_mix(h, static_cast<uint32_t>(p.arp.rate_mode));
     h = fp_mix(h, p.arp.rate_note_index);
     h = fp_mix(h, p.arp.rate_ms);
-    h = fp_mix(h, p.arp.range_semitones);
-    h = fp_mix(h, p.arp.keys);
-    h = fp_mix(h, p.arp.num_steps);
+    h = fp_mix(h, p.arp.distance_semitones);
+    h = fp_mix(h, p.arp.steps);
+    h = fp_mix(h, p.arp.cycle);
     h = fp_mix(h, static_cast<uint32_t>(p.arp.style));
     h = fp_mix(h, p.key_filter.enabled ? 1u : 0u);
     h = fp_mix(h, p.key_filter.root_note);
@@ -195,7 +195,7 @@ uint32_t ModeEngine::arp_fingerprint() const {
     h = fp_mix(h, static_cast<uint32_t>(p.chord.type));
     h = fp_mix(h, static_cast<uint32_t>(p.transpose.semitones));
     h = fp_mix(h, static_cast<uint32_t>(p.transpose.octaves));
-    h = fp_mix(h, p.bpm);
+    h = fp_mix(h, p.timing.bpm);
     h = fp_mix(h, static_cast<uint32_t>(state_->runtime.mode));
     return h;
 }
@@ -504,7 +504,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
     const uint32_t release = gate_release_ms();
     if (picked == last_random_note_ && last_random_note_ != 0) {
         // Keep the note ringing; only retrigger when a different tone is drawn.
-        next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
+        next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
         return;
     }
     if (last_random_note_ != 0 && midi_) {
@@ -519,7 +519,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         state_->runtime.show_note = true;
     }
     ui_repaint_ = true;
-    next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
+    next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
 }
 
 uint8_t ModeEngine::pick_random_note(uint8_t anchor) {
@@ -622,7 +622,7 @@ uint32_t ModeEngine::next_arp_onset(const Pattern& p, uint32_t now_ms, uint32_t 
         base += rng_.range(p.timing.humanize_ms);
     }
     // Quantize: snap the onset up to the next grid boundary.
-    const uint32_t grid = quantize_grid_ms(p.timing.quantize_grid, p.bpm);
+    const uint32_t grid = quantize_grid_ms(p.timing.quantize_grid, p.timing.bpm);
     if (grid > 0) {
         base = ((base + grid - 1u) / grid) * grid;
     }

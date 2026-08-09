@@ -41,20 +41,21 @@ int32_t SimpleRng::range_int(int32_t lo, int32_t hi) {
 
 namespace {
 
-uint8_t clamp_keys(uint8_t keys) {
-    if (keys == 0) { return 1; }
-    if (keys > 16) { return 16; }
-    return keys;
+// Количество позиций: Steps (доп. транспозиций) + исходная; максимум 16.
+uint8_t positions_of(const ArpCfg& cfg) {
+    uint16_t p = static_cast<uint16_t>(cfg.steps) + 1u;
+    if (p > 16u) { p = 16u; }
+    return static_cast<uint8_t>(p);
 }
 
-// "Шаги по клавиатуре": каждая нота базы дублируется `keys` раз, шагом
-// `range` полутонов вверх (12 = октава), затем набор фильтруется по
+// "Шаги по клавиатуре": каждая нота базы дублируется `steps+1` раз, шагом
+// `distance` полутонов вверх (12 = октава), затем набор фильтруется по
 // тональности и сортируется.
 NoteSet build_keyboard_set(const NoteSet& base, const ArpCfg& cfg, const KeyFilterCfg& kf) {
     NoteSet out {};
-    const uint8_t keys = clamp_keys(cfg.keys);
-    const uint8_t step_st = cfg.range_semitones;
-    if (keys <= 1) {  // без расширения -> «как есть»
+    const uint8_t positions = positions_of(cfg);
+    const uint8_t step_st = cfg.distance_semitones;
+    if (positions <= 1) {  // Steps = 0: без расширения -> «как есть»
         for (uint8_t i = 0; i < base.count && out.count < out.notes.size(); ++i) {
             out.notes[out.count++] = base.notes[i];
         }
@@ -65,7 +66,7 @@ NoteSet build_keyboard_set(const NoteSet& base, const ArpCfg& cfg, const KeyFilt
                         static_cast<uint8_t>(kf.scale) < static_cast<uint8_t>(ScaleId::kCount);
     bool seen[128] = {};
     for (uint8_t i = 0; i < base.count; ++i) {
-        for (uint8_t k = 0; k < keys; ++k) {
+        for (uint8_t k = 0; k < positions; ++k) {
             const uint16_t cand =
                 static_cast<uint16_t>(base.notes[i]) + static_cast<uint16_t>(k) * step_st;
             if (cand > 127U) { break; }
@@ -113,7 +114,7 @@ void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg, const KeyFilterC
     if (n == 0) {
         return;
     }
-    const uint8_t steps = cfg.num_steps > 0 ? cfg.num_steps : 1;
+    const uint8_t steps = cfg.cycle > 0 ? cfg.cycle : 1;
 
     const auto push = [&](uint8_t note) {
         if (out_count < out.size()) { out[out_count++] = note; }
@@ -130,8 +131,8 @@ void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg, const KeyFilterC
     }
 
     SimpleRng rng(0xAC010203u ^ static_cast<uint32_t>(base.notes[0]) ^
-                  (static_cast<uint32_t>(cfg.range_semitones) << 8u) ^
-                  (static_cast<uint32_t>(cfg.keys) << 4u) ^
+                  (static_cast<uint32_t>(cfg.distance_semitones) << 8u) ^
+                  (static_cast<uint32_t>(cfg.steps) << 4u) ^
                   static_cast<uint32_t>(cfg.style));
 
     if (cfg.style == ArpStyle::RandomOnce) {

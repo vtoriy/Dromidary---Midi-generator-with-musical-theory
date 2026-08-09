@@ -59,6 +59,7 @@ private:
 
     uint32_t last_joy_tilt_ms_ {0};
     Direction last_joy_dir_ {Direction::Center};
+    uint32_t joy_hold_ms_ {0};  // start of the current same-direction hold (for tilt acceleration)
     bool joy_btn_prev_ {false};
     uint32_t joy_btn_press_ms_ {0};
     uint32_t joy_btn_last_click_ms_ {0};

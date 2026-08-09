@@ -15,6 +15,10 @@ const char* const kCTypeRadialLabels[8] = {"Off", "Maj", "Min", "Maj7", "Min7", 
 const char* const kAStyleRadialLabels[8] = {"Off", "Up", "Down", "UpDn", "DnUp", "Play", "Rnd", "CvDv"};
 const char* const kStrumLabels[8] = {"Off", "5", "10", "15", "20", "25", "30", "35"};
 constexpr int kStrumZones[8] = {0, 5, 10, 15, 20, 25, 30, 35};
+const char* const kSwingRadialLabels[8] = {"Off", "12", "25", "33", "42", "50", "62", "75"};
+constexpr int kSwingZones[8] = {0, 12, 25, 33, 42, 50, 62, 75};
+const char* const kHumRadialLabels[8] = {"0", "5", "10", "15", "20", "25", "30", "40"};
+constexpr int kHumZones[8] = {0, 5, 10, 15, 20, 25, 30, 40};
 
 const char* const kScaleFullLabels[16] = {
     "Off", "Maj", "Min", "Dor", "Phr", "Lyd", "Mix", "Loc",
@@ -68,7 +72,7 @@ const SnapMode kSnapIds[3] = {SnapMode::SnapUp, SnapMode::SnapDown, SnapMode::Mu
 
 const char* const kOnOffLabels[2] = {"Off", "On"};
 const char* const kModeLabels[2] = {"KB", "RND"};
-const char* const kRateModeLabels[2] = {"Note", "Ms"};
+const char* const kRateModeLabels[2] = {"Note", "Free"};
 const RateMode kRateModeIds[2] = {RateMode::Note, RateMode::Ms};
 
 const char* const kLengthLabels[4] = {"16", "32", "48", "64"};
@@ -239,15 +243,36 @@ ItemRef emit_arp_block(MenuContent& c, Pattern& p) {
         [&p]() { return p.arp.rate_mode == RateMode::Note ? static_cast<int32_t>(p.arp.rate_note_index) : static_cast<int32_t>(p.arp.rate_ms); },
         [&p](int32_t v) { if (p.arp.rate_mode == RateMode::Note) { p.arp.rate_note_index = static_cast<uint8_t>(v % kArpNoteDivCount); } else { p.arp.rate_ms = static_cast<uint16_t>(v); } },
         [&p]() { return p.arp.rate_mode == RateMode::Note ? 0 : 1; }));
-    emit(c, int_slider_io("Range",
-        [&p]() { return static_cast<int32_t>(p.arp.range_semitones); },
-        [&p](int32_t v) { p.arp.range_semitones = static_cast<uint8_t>(v); }, 0, 48));
-    emit(c, int_slider_io("Keys",
-        [&p]() { return static_cast<int32_t>(p.arp.keys); },
-        [&p](int32_t v) { p.arp.keys = static_cast<uint8_t>(v); }, 1, 16));
+    emit(c, int_slider_io("Distance",
+        [&p]() { return static_cast<int32_t>(p.arp.distance_semitones); },
+        [&p](int32_t v) { p.arp.distance_semitones = static_cast<uint8_t>(v); }, 0, 48));
     emit(c, int_slider_io("Steps",
-        [&p]() { return static_cast<int32_t>(p.arp.num_steps); },
-        [&p](int32_t v) { p.arp.num_steps = static_cast<uint8_t>(v); }, 1, 32));
+        [&p]() { return static_cast<int32_t>(p.arp.steps); },
+        [&p](int32_t v) { p.arp.steps = static_cast<uint8_t>(v); }, 0, 16));
+    emit(c, int_slider_io("Cycle",
+        [&p]() { return static_cast<int32_t>(p.arp.cycle); },
+        [&p](int32_t v) { p.arp.cycle = static_cast<uint8_t>(v); }, 1, 32));
+    return wrap_ref(c, start);
+}
+
+ItemRef emit_timing_block(MenuContent& c, Pattern& p) {
+    const std::size_t start = c.item_count;
+    emit(c, int_slider_io("BPM",
+        [&p]() { return static_cast<int32_t>(p.timing.bpm); },
+        [&p](int32_t v) { p.timing.bpm = static_cast<uint16_t>(v); }, 20, 300));
+    emit(c, int_slider_io("Swing",
+        [&p]() { return static_cast<int32_t>(p.timing.swing_pct); },
+        [&p](int32_t v) { p.timing.swing_pct = static_cast<uint8_t>(v); }, 0, 100));
+    emit(c, int_slider_io("Humanize",
+        [&p]() { return static_cast<int32_t>(p.timing.humanize_ms); },
+        [&p](int32_t v) { p.timing.humanize_ms = static_cast<uint8_t>(v); }, 0, 50));
+    emit(c, option_idx_io("Quantize",
+        [&p]() { return static_cast<int32_t>(p.timing.quantize_grid); },
+        [&p](int32_t v) { p.timing.quantize_grid = static_cast<uint8_t>(v % 8); },
+        kQuantizeLabels, 8));
+    emit(c, toggle_item_io("Legato",
+        [&p]() { return p.timing.legato ? 1 : 0; },
+        [&p](int32_t v) { p.timing.legato = (v != 0); }));
     return wrap_ref(c, start);
 }
 
@@ -386,6 +411,30 @@ void apply_strum_zone(ChordCfg& cc, int zone) {
     cc.strum_delay_ms = static_cast<uint8_t>(kStrumZones[zone]);
 }
 
+int swing_zone(const TimingCfg& t) {
+    for (int i = 7; i >= 0; --i) {
+        if (static_cast<int>(t.swing_pct) >= kSwingZones[i]) { return i; }
+    }
+    return 0;
+}
+
+void apply_swing_zone(TimingCfg& t, int zone) {
+    if (zone < 0 || zone > 7) { return; }
+    t.swing_pct = static_cast<uint8_t>(kSwingZones[zone]);
+}
+
+int hum_zone(const TimingCfg& t) {
+    for (int i = 7; i >= 0; --i) {
+        if (static_cast<int>(t.humanize_ms) >= kHumZones[i]) { return i; }
+    }
+    return 0;
+}
+
+void apply_hum_zone(TimingCfg& t, int zone) {
+    if (zone < 0 || zone > 7) { return; }
+    t.humanize_ms = static_cast<uint8_t>(kHumZones[zone]);
+}
+
 int scale_full_index(const KeyFilterCfg& kf) {
     if (!kf.enabled) { return 0; }
     const uint8_t id = static_cast<uint8_t>(kf.scale);
@@ -510,6 +559,23 @@ void build_quick_rows(AppState* st, MenuContent& c) {
         add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
     }
 
+    // ---- Timing row (affects the arp; click -> DETAIL) ----
+    {
+        QuickRow& r = add_row("Time");
+        add_seg(r, Segment {SegmentType::Radial, "Swing",
+            [&p]() { return static_cast<int32_t>(swing_zone(p.timing)); },
+            [&p](int32_t z) { apply_swing_zone(p.timing, static_cast<int>(z)); },
+            kSwingRadialLabels, 8, nullptr, 0, false});
+
+        add_seg(r, Segment {SegmentType::Radial, "Quant",
+            [&p]() { return static_cast<int32_t>(p.timing.quantize_grid); },
+            [&p](int32_t z) { p.timing.quantize_grid = static_cast<uint8_t>(z % 8); },
+            kQuantizeLabels, 8, nullptr, 0, false});
+
+        const ItemRef ref = emit_timing_block(c, p);
+        add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
+    }
+
     // ---- ADSR row (informative label, click -> DETAIL) ----
     {
         QuickRow& r = add_row("ADR");
@@ -591,9 +657,6 @@ void build_full_menu(AppState* st, MenuContent& c) {
         [&p]() { return static_cast<int32_t>((p.length / 16) - 1); },
         [&p](int32_t v) { p.length = static_cast<uint8_t>(16 * (static_cast<int>(v) + 1)); },
         kLengthLabels, 4));
-    emit(c, int_slider_io("BPM",
-        [&p]() { return static_cast<int32_t>(p.bpm); },
-        [&p](int32_t v) { p.bpm = static_cast<uint16_t>(v); }, 20, 300));
     pat_count = static_cast<int>(c.item_count - pat_start);
 
     // Key / Scale
@@ -613,19 +676,7 @@ void build_full_menu(AppState* st, MenuContent& c) {
 
     // Timing
     timing_start = c.item_count;
-    emit(c, int_slider_io("Swing",
-        [&p]() { return static_cast<int32_t>(p.timing.swing_pct); },
-        [&p](int32_t v) { p.timing.swing_pct = static_cast<uint8_t>(v); }, 0, 100));
-    emit(c, int_slider_io("Humanize",
-        [&p]() { return static_cast<int32_t>(p.timing.humanize_ms); },
-        [&p](int32_t v) { p.timing.humanize_ms = static_cast<uint8_t>(v); }, 0, 50));
-    emit(c, option_idx_io("Quantize",
-        [&p]() { return static_cast<int32_t>(p.timing.quantize_grid); },
-        [&p](int32_t v) { p.timing.quantize_grid = static_cast<uint8_t>(v % 8); },
-        kQuantizeLabels, 8));
-    emit(c, toggle_item_io("Legato",
-        [&p]() { return p.timing.legato ? 1 : 0; },
-        [&p](int32_t v) { p.timing.legato = (v != 0); }));
+    emit_timing_block(c, p);
     timing_count = static_cast<int>(c.item_count - timing_start);
 
     // Gate / ADSR (same 6-parameter block as the Quick DETAIL submenu)

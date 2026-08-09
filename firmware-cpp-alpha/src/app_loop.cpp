@@ -323,15 +323,35 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
     if (dir != Direction::Center) {
         if (dir != last_joy_dir_) {
             last_joy_dir_ = dir;
+            joy_hold_ms_ = now_ms;
             last_joy_tilt_ms_ = 0;
         }
-        if ((now_ms - last_joy_tilt_ms_) >= kJoyRepeatMs) {
+        // Accelerating auto-repeat: while the joystick stays deflected in the
+        // same direction, the tilt interval shrinks (and, at the fastest tier,
+        // several tilts fire per tick) so long holds sweep wide ranges quickly
+        // without the initial repeat being too jumpy.
+        uint32_t interval = kJoyRepeatMs;
+        uint32_t taps = 1;
+        const uint32_t hold = now_ms - joy_hold_ms_;
+        if (hold > 3000) {
+            interval = 60;
+            taps = 3;
+        } else if (hold > 1600) {
+            interval = 110;
+            taps = 2;
+        } else if (hold > 700) {
+            interval = 150;
+            taps = 1;
+        }
+        if ((now_ms - last_joy_tilt_ms_) >= interval) {
             last_joy_tilt_ms_ = now_ms;
             const bool shift = fn_pressed(kBtnShift);
-            if (menu_.editing_radial()) {
-                menu_.radial_select(direction_to_zone(dir));
-            } else {
-                menu_.tilt(dir, shift);
+            for (uint32_t k = 0; k < taps; ++k) {
+                if (menu_.editing_radial()) {
+                    menu_.radial_select(direction_to_zone(dir));
+                } else {
+                    menu_.tilt(dir, shift);
+                }
             }
             ui_dirty_ = true;
             mode_.on_arp_config_changed(now_ms);

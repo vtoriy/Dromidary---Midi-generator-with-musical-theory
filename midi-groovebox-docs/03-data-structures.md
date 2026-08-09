@@ -34,7 +34,6 @@ struct Step {
 struct Pattern {
     std::array<Step, kStepCountMax> steps {};
     uint8_t length {16};               // 16/32/48/64
-    uint16_t bpm {120};                // 20..300
     KeyFilterCfg key_filter {};
     ChordCfg     chord {};
     ArpCfg       arp {};
@@ -65,20 +64,21 @@ struct ChordCfg {
 struct ArpCfg {
     bool enabled {false};
     bool latch {false};
-    RateMode rate_mode {RateMode::Note}; // Note (деления) / Ms (мс)
-    uint8_t rate_note_index {6};         // индекс в kArpNoteDivs => "1/8"
-    uint16_t rate_ms {100};              // 10..2000, шаг 10
-    uint8_t range_semitones {12};        // шаг между позициями, полутоны (0..48; 12 = октава)
-    uint8_t keys {2};                    // «шагов по клавиатуре»: сколько позиций вверх (1..16)
-    uint8_t num_steps {8};               // длина цикла арпеджио в шагах (1..32)
+    RateMode rate_mode {RateMode::Note};  // Note (доли такта) / Ms (Free)
+    uint8_t rate_note_index {6};          // индекс в kArpNoteDivs => "1/8"
+    uint16_t rate_ms {100};               // Rate (Free): 10..2000, шаг 10
+    uint8_t distance_semitones {12};      // Distance: интервал транспонирования, полутоны (0..48; 12 = октава)
+    uint8_t steps {1};                    // Steps: кол-во доп. транспозиций (позиций = steps+1; 0 = только исходная высота)
+    uint8_t cycle {8};                    // Cycle: длина цикла арпеджио в шагах (1..32)
     ArpStyle style {ArpStyle::Up};
 };
 
 struct TimingCfg {
-    uint8_t swing_pct {0};         // задержка "off-beat" шага арпа (0..100)
-    uint8_t humanize_ms {0};       // псевдослучайный сдвиг шага арпа (0..50)
-    uint8_t quantize_grid {0};     // индекс в kQuantizeGrids (0 = Off)
-    bool legato {false};           // перехлёст нот арпа (без разрыва)
+    uint16_t bpm {120};          // темп, 20..300
+    uint8_t swing_pct {0};       // задержка "off-beat" шага арпа (0..100)
+    uint8_t humanize_ms {0};     // псевдослучайный сдвиг шага арпа (0..50)
+    uint8_t quantize_grid {0};   // индекс в kQuantizeGrids (0 = Off)
+    bool legato {false};         // перехлёст нот арпа (без разрыва)
 };
 
 struct GateCfg {

@@ -22,7 +22,7 @@ public:
     void reset();
 
     // Merged/ordered input set -> arp cycle (range applied, style applied).
-    // `num_steps` limits the cycle length (kept >= 1).
+    // `cycle` limits the cycle length (kept >= 1).
     void rebuild(const NoteSet& input, const ArpCfg& cfg);
 
     bool active() const;

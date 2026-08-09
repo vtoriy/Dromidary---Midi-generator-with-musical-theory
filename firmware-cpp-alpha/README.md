@@ -26,6 +26,10 @@ Implemented:
 - timing FX (swing/humanize/quantize/legato) applied to the live arpeggio,
   Gate/ADSR (attack delays Note On, release extends Note Off) and chord voicing
   Block/Strum/Roll via a delayed-event queue in `ModeEngine`
+- timing quick row (Swing/Quantize + DETAIL) and BPM moved into `TimingCfg`
+  (Quick → Time; FULL → Timing section)
+- joystick tilt auto-repeat with hold-time acceleration (220 ms → ~60 ms, x3
+  steps on the fastest tier)
 - USB MIDI note on/off path + function keys duplicated as MIDI CC (20–25, ch. 16)
 - persisted click-timing settings (debounce/double/long) in the last flash sector
 - raw-input **Test** screen (System → Test), exit with Shift + joystick click

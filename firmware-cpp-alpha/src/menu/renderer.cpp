@@ -205,11 +205,11 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
         // the two-note readout on the right (pressed key > generated note).
         snprintf(meta, sizeof(meta), "o%d %d",
                  static_cast<int>(state.runtime.base_octave),
-                 static_cast<int>(state.active_pattern().bpm));
+                 static_cast<int>(state.active_pattern().timing.bpm));
     } else {
         snprintf(meta, sizeof(meta), "o%d %d s%d",
                  static_cast<int>(state.runtime.base_octave),
-                 static_cast<int>(state.active_pattern().bpm),
+                 static_cast<int>(state.active_pattern().timing.bpm),
                  static_cast<int>(state.runtime.current_step));
     }
     display_->draw_text(meta, kStatusMetaX, kStatusY);
