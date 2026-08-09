@@ -1,6 +1,7 @@
 
-# 🎹 dromidary — MIDI Groovebox / Sequencer for Raspberry Pi Pico
-<img width="400" height="200" alt="Запись 2026-08-09 165642" src="https://github.com/user-attachments/assets/b2611609-838f-41dd-a6cd-635f60f9823a" />
+# 🎹 Dromidary — MIDI Generator / Sequencer with musical theory for Raspberry Pi Pico
+<img width="426" height="240" alt="Video Project 3" src="https://github.com/user-attachments/assets/7f5c6ceb-e98d-4e63-b966-6f983f88007e" />
+
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Language: C++](https://img.shields.io/badge/Language-C%2B%2B17-00599C.svg)]()
