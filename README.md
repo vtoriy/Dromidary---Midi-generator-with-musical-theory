@@ -1,5 +1,5 @@
 # 🎹 dromidary — MIDI Groovebox / Sequencer for Raspberry Pi Pico
-<img width="796" height="388" alt="dromidary" src="https://github.com/user-attachments/assets/389cfb0f-7e6a-4106-8bf7-0b0e91c95cea" />
+<img width="400" height="194" alt="dromidary" src="https://github.com/user-attachments/assets/389cfb0f-7e6a-4106-8bf7-0b0e91c95cea" />
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Language: C++](https://img.shields.io/badge/Language-C%2B%2B17-00599C.svg)]()
