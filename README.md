@@ -23,18 +23,21 @@
 |---|---|---|
 | 🎼 | **Key / Scale Quantizer** | 16 ладов; «неправильные» ноты: snap-up, snap-down или mute |
 | 🎹 | **Chord Builder** | 26 типов аккордов (triads, 7th, sus, altered, quartal/quintal, cluster, power) |
-| 🔁 | **Arpeggiator** | 8 стилей (Up, Down, Up-Down, Down-Up, As Played, Random, Converge/Diverge, Off), rate в нотах (1/64–1/1) или мс, range, steps, **latch** |
+| 🔁 | **Arpeggiator** | 19 стилей (Up/Down, UpDown/DownUp, Up&Dn/Dn&Up, Converge/Diverge/Con&Div, Pinky/Thumb-педали, As Played, Chord Trigger, Random/Random Once/Random Other, Off), rate в нотах (1/64–1/1, включая триоли) или мс (Free); **Distance** = шаг транспонирования (полутоны), **Steps** = доп. транспозиции, **Cycle** = длина цикла, фильтр по тональности, **latch** |
 | 🎵 | **RandomNote** | Непрерывная генерация случайных нот вокруг якоря клавиши/Play, с фильтром в тональность |
 | 🎚️ | **Полифонический live-арпеджио** | Все зажатые клавиши объединяются в один аккорд → единый арп-цикл |
 | ⬆️ | **Transpose / Octave** | Полутоны и октавы (до Key Filter); базовая октава клавиатуры 1–8 |
 | 🎛️ | **Quick / Detail / Main меню** | Быстрые ячейки, радиальный селектор (8 зон), полное дерево, сброс Rest+клик |
 | ⚙️ | **Persist во flash** | Тайминги кликов (debounce/double/long) сохраняются в последний сектор |
+| 🎛️ | **Timing-эффекты** | Swing/humanize/quantize/legato — применяются к live-арпеджио |
+| 🎚️ | **Gate/ADSR** | Attack задерживает Note On, release продлевает Note Off |
+| 🎸 | **Voicing** | Block / Strum / Roll (с `strum_delay_ms`) для аккордов в live |
 | 🔬 | **Экран Test** | Диагностика распиновки кнопок (System → Test), выход Shift+клик |
 | 🎚️ | **CC-дубли** | Функц. кнопки дублируются MIDI CC 20–25 на канале 16 для DAW |
 
 **Не реализовано (отложено):** паттерн-секвенсор (запись/воспроизведение),
-режимы Random Pattern / Pattern / MIDI Filter, timing-эффекты и ADSR (в меню —
-настройки, в вывод не применяются), UART MIDI DIN, MIDI Clock, сохранение паттернов.
+режимы Random Pattern / Pattern / MIDI Filter, UART MIDI DIN, MIDI Clock,
+сохранение паттернов. Timing/ADSR/voicing — реализованы (см. таблицу выше).
 Подробно — [`midi-groovebox-docs/07-roadmap-open-questions.md`](midi-groovebox-docs/07-roadmap-open-questions.md).
 
 ---
@@ -48,9 +51,12 @@
       │
       ▼
 Transpose ──► Key Filter ──► Chord Builder ──► secondary filter ──► Arpeggiator
-(± полутоны/октавы)  (16 ладов)  (26 типов)   (структура в лад)    (live-цикл)
+(± полутоны/октавы)  (16 ладов)  (26 типов)   (структура в лад)     (live-цикл)
       │                                                              │
-      └──────────────────────────────────────────────────────────────▼
+      ▼                                                              ▼
+  Timing (swing/humanize/quantize/legato)                     Gate/ADSR + Voicing
+                                                              (attack/release, Strum/Roll)
+      └───────────────────────────────────────────────────────────────▼
                                                                   USB MIDI OUT
 ```
 

@@ -14,7 +14,7 @@ namespace {
 
 constexpr uint8_t kMidiOctaveOffset = 2;
 constexpr uint8_t kKeyDebounce = 5;
-constexpr uint32_t kJoyRepeatMs = 220;
+constexpr uint32_t kJoyRepeatMs = 190;
 constexpr uint32_t kFlushMs = 40;
 constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
 constexpr uint32_t kPersistSaveDelayMs = 500; // wait 0.5s of no edits before flashing
@@ -193,6 +193,15 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                     (runtime.base_octave + kMidiOctaveOffset) * 12);
                 mode_.random_loop_start(anchor, now_ms);
             }
+        } else if (runtime.mode == PlayMode::MidiKeyboard || runtime.mode == PlayMode::MidiFilter) {
+            // Play as a transport stop for the live arpeggio: one press silences
+            // everywhere the arp/keyboard is sounding, keeping a binary `playing`
+            // state that the status bar reflects. Pressing Play again while idle
+            // just flips the flag; the next key press restarts the arp.
+            if (mode_.any_active_input()) {
+                runtime.playing = false;
+                mode_.all_notes_off();
+            }
         }
         ui_dirty_ = true;
     }
@@ -323,15 +332,38 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
     if (dir != Direction::Center) {
         if (dir != last_joy_dir_) {
             last_joy_dir_ = dir;
+            joy_hold_ms_ = now_ms;
             last_joy_tilt_ms_ = 0;
         }
-        if ((now_ms - last_joy_tilt_ms_) >= kJoyRepeatMs) {
+        // Accelerating auto-repeat: while the joystick stays deflected in the
+        // same direction, the tilt interval shrinks (and, at the fastest tier,
+        // several tilts fire per tick) so long holds sweep wide ranges quickly
+        // without the initial repeat being too jumpy.
+        uint32_t interval = kJoyRepeatMs;
+        uint32_t taps = 1;
+        const uint32_t hold = now_ms - joy_hold_ms_;
+        if (hold > 2500) {
+            interval = 45;
+            taps = 4;
+        } else if (hold > 1400) {
+            interval = 70;
+            taps = 3;
+        } else if (hold > 700) {
+            interval = 100;
+            taps = 2;
+        } else if (hold > 350) {
+            interval = 140;
+            taps = 1;
+        }
+        if ((now_ms - last_joy_tilt_ms_) >= interval) {
             last_joy_tilt_ms_ = now_ms;
             const bool shift = fn_pressed(kBtnShift);
-            if (menu_.editing_radial()) {
-                menu_.radial_select(direction_to_zone(dir));
-            } else {
-                menu_.tilt(dir, shift);
+            for (uint32_t k = 0; k < taps; ++k) {
+                if (menu_.editing_radial()) {
+                    menu_.radial_select(direction_to_zone(dir));
+                } else {
+                    menu_.tilt(dir, shift);
+                }
             }
             ui_dirty_ = true;
             mode_.on_arp_config_changed(now_ms);
@@ -392,6 +424,11 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
         last_raw_ = raw;
 
         mode_.tick(now_ms);
+        // Live-note readout: repaint when the arp/random advanced the sounding
+        // note even though no physical input happened.
+        if (mode_.take_ui_dirty()) {
+            ui_dirty_ = true;
+        }
 
         // The QUICK row set depends on the play mode; when it changes (via the
         // Mode cell) rebuild the menu and silence anything still sounding.

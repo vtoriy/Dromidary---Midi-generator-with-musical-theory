@@ -66,14 +66,20 @@ void ModeEngine::all_notes_off() {
         }
         held_set_[c].count = 0;
     }
+    clear_pending();
 }
 
-void ModeEngine::release_chip(uint8_t chip_idx) {
+void ModeEngine::release_chip(uint8_t chip_idx, uint32_t now_ms) {
     latched_[chip_idx] = false;
     chip_in_arp_[chip_idx] = false;
     if (chip_held_[chip_idx] && midi_) {
+        const uint32_t release = gate_release_ms();
+        const uint32_t off_at = now_ms + release;
         for (uint8_t i = 0; i < held_set_[chip_idx].count; ++i) {
-            midi_->note_off(held_set_[chip_idx].notes[i]);
+            // A strummed/gate note whose Note On has not fired yet is dropped;
+            // the fired ones get their (delayed) release.
+            cancel_pending(held_set_[chip_idx].notes[i], true);
+            schedule_pending(off_at, held_set_[chip_idx].notes[i], false);
         }
         held_set_[chip_idx].count = 0;
         chip_held_[chip_idx] = false;
@@ -98,9 +104,16 @@ void ModeEngine::refresh_show_note() {
     }
 }
 
+bool ModeEngine::take_ui_dirty() {
+    const bool v = ui_repaint_;
+    ui_repaint_ = false;
+    return v;
+}
+
 void ModeEngine::stop_arp() {
     if (current_arp_note_ != kCapNote && midi_) {
         midi_->note_off(current_arp_note_);
+        cancel_pending(current_arp_note_, true);
     }
     current_arp_note_ = kCapNote;
     arp_active_ = false;
@@ -110,7 +123,7 @@ void ModeEngine::stop_arp() {
 
 void ModeEngine::schedule_next_step(uint32_t now_ms) {
     const Pattern& p = state_->active_pattern();
-    const uint16_t interval = arp_interval_ms(p.arp, p.bpm);
+    const uint16_t interval = arp_interval_ms(p.arp, p.timing.bpm);
     // Align the restart to the next step boundary of the arp grid (a multiple
     // of the selected quantization), so the rhythm stays locked to the beat.
     const uint32_t t0 = (last_step_ms_ != 0) ? last_step_ms_ : now_ms;
@@ -126,9 +139,12 @@ void ModeEngine::advance_arp(uint32_t now_ms) {
     if (now_ms < next_arp_ms_) {
         return;
     }
-    if (current_arp_note_ != kCapNote && midi_) {
-        midi_->note_off(current_arp_note_);
-    }
+    const Pattern& p = state_->active_pattern();
+    const uint16_t interval = arp_interval_ms(p.arp, p.timing.bpm);
+    const uint32_t attack = gate_attack_ms();
+    const uint32_t release = gate_release_ms();
+    const bool legato = p.timing.legato;
+
     const uint8_t note = arp_seq_[arp_index_ % arp_seq_count_];
     arp_index_ = static_cast<uint8_t>((arp_index_ + 1) % arp_seq_count_);
     // Steady hold: when the next step is the same note already sounding, do not
@@ -136,20 +152,26 @@ void ModeEngine::advance_arp(uint32_t now_ms) {
     // while a key was held). Keep it ringing until a genuinely different note.
     if (note != current_arp_note_) {
         if (current_arp_note_ != kCapNote && midi_) {
-            midi_->note_off(current_arp_note_);
+            // Legato overlaps the tail of the previous note with the new one;
+            // otherwise the previous note releases here (with gate release).
+            if (legato) {
+                schedule_pending(now_ms + interval, current_arp_note_, false);
+            } else {
+                schedule_pending(now_ms + release, current_arp_note_, false);
+            }
         }
         current_arp_note_ = note;
         if (midi_) {
-            midi_->note_on(note, 100);
+            schedule_pending(now_ms + attack, note, true);
         }
         if (state_ != nullptr) {
             state_->runtime.last_note = note;
             state_->runtime.show_note = true;
         }
+        ui_repaint_ = true;
     }
     last_step_ms_ = now_ms;
-    const Pattern& p = state_->active_pattern();
-    next_arp_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
+    next_arp_ms_ = next_arp_onset(p, now_ms, interval);
 }
 
 // Hash of every config value that influences the live arp sequence.
@@ -161,8 +183,9 @@ uint32_t ModeEngine::arp_fingerprint() const {
     h = fp_mix(h, static_cast<uint32_t>(p.arp.rate_mode));
     h = fp_mix(h, p.arp.rate_note_index);
     h = fp_mix(h, p.arp.rate_ms);
-    h = fp_mix(h, p.arp.range_semitones);
-    h = fp_mix(h, p.arp.num_steps);
+    h = fp_mix(h, p.arp.distance_semitones);
+    h = fp_mix(h, p.arp.steps);
+    h = fp_mix(h, p.arp.cycle);
     h = fp_mix(h, static_cast<uint32_t>(p.arp.style));
     h = fp_mix(h, p.key_filter.enabled ? 1u : 0u);
     h = fp_mix(h, p.key_filter.root_note);
@@ -172,7 +195,7 @@ uint32_t ModeEngine::arp_fingerprint() const {
     h = fp_mix(h, static_cast<uint32_t>(p.chord.type));
     h = fp_mix(h, static_cast<uint32_t>(p.transpose.semitones));
     h = fp_mix(h, static_cast<uint32_t>(p.transpose.octaves));
-    h = fp_mix(h, p.bpm);
+    h = fp_mix(h, p.timing.bpm);
     h = fp_mix(h, static_cast<uint32_t>(state_->runtime.mode));
     return h;
 }
@@ -210,6 +233,7 @@ void ModeEngine::rebuild_arp(uint32_t now_ms, bool align_next_step) {
     // (note press/release) cut it off right away for responsiveness.
     if (current_arp_note_ != kCapNote && midi_ && !align_next_step) {
         midi_->note_off(current_arp_note_);
+        cancel_pending(current_arp_note_, true);
         current_arp_note_ = kCapNote;
     }
     arp_active_ = false;
@@ -218,16 +242,18 @@ void ModeEngine::rebuild_arp(uint32_t now_ms, bool align_next_step) {
     if (merged.count == 0) {
         if (current_arp_note_ != kCapNote && midi_) {
             midi_->note_off(current_arp_note_);
+            cancel_pending(current_arp_note_, true);
             current_arp_note_ = kCapNote;
         }
         return;
     }
 
     const Pattern& p = state_->active_pattern();
-    build_arp_sequence(merged, p.arp, arp_seq_, arp_seq_count_);
+    build_arp_sequence(merged, p.arp, p.key_filter, arp_seq_, arp_seq_count_);
     if (arp_seq_count_ == 0) {
         if (current_arp_note_ != kCapNote && midi_) {
             midi_->note_off(current_arp_note_);
+            cancel_pending(current_arp_note_, true);
             current_arp_note_ = kCapNote;
         }
         return;
@@ -257,9 +283,20 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
     // RandomNote: each pressed key raises the anchor octave of the continuous
     // random generator. The first press (or Play) starts the loop; it keeps
     // emitting random notes until RandomNote is left or Play is pressed again.
+    // Re-pressing the same key that just produced the current tone toggles the
+    // generation back off (and clears the readout).
     if (mode == PlayMode::RandomNote) {
         if (latch) {
             latched_[chip_idx] = true;
+        }
+        if (random_loop_ && state_ != nullptr &&
+            state_->runtime.last_input_note == raw_note) {
+            random_loop_stop();
+            state_->runtime.last_input_note = 0;
+            state_->runtime.last_note = 0;
+            state_->runtime.show_note = false;
+            ui_repaint_ = true;
+            return;
         }
         // Record the pressed key so the status bar can show input > generated.
         if (state_ != nullptr) {
@@ -288,7 +325,7 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
                 stop_arp();
             }
         } else {
-            release_chip(chip_idx);
+            release_chip(chip_idx, now_ms);
         }
         return;
     }
@@ -302,7 +339,7 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
                     chip_in_arp_[c] = false;
                 }
             }
-            release_chip(chip_idx);
+            release_chip(chip_idx, now_ms);
             arp_notes_[chip_idx] = raw_note;
             chip_in_arp_[chip_idx] = true;
             latched_[chip_idx] = true;
@@ -315,8 +352,10 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         return;
     }
 
-    // Non-arp live: send the note set immediately.
-    const NoteSet set = build_note_set(raw_note, state_->active_pattern());
+    // Non-arp live: spread the chord per voicing (Block immediate, Strum
+    // staggered, Roll staggered with short plucked tails) over the gate attack.
+    const Pattern& p = state_->active_pattern();
+    const NoteSet set = build_note_set(raw_note, p);
     if (set.count == 0) {
         return;
     }
@@ -324,8 +363,25 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         state_->runtime.last_note = set.notes[0];
         state_->runtime.show_note = true;
     }
-    for (uint8_t i = 0; i < set.count; ++i) {
-        midi_->note_on(set.notes[i], 100);
+    const uint32_t attack = gate_attack_ms();
+    if (p.chord.voicing == VoicingMode::Block) {
+        for (uint8_t i = 0; i < set.count; ++i) {
+            schedule_pending(now_ms + attack, set.notes[i], true);
+        }
+    } else {
+        const uint32_t stride = (set.count > 1) ? p.chord.strum_delay_ms : 0;
+        if (p.chord.voicing == VoicingMode::Strum) {
+            for (uint8_t i = 0; i < set.count; ++i) {
+                schedule_pending(now_ms + attack + i * stride, set.notes[i], true);
+            }
+        } else {  // Roll: pluck each note until the last, which sustains.
+            for (uint8_t i = 0; i < set.count; ++i) {
+                schedule_pending(now_ms + attack + i * stride, set.notes[i], true);
+                if (i + 1 < set.count) {
+                    schedule_pending(now_ms + attack + (i + 1) * stride, set.notes[i], false);
+                }
+            }
+        }
     }
     held_set_[chip_idx] = set;
     chip_held_[chip_idx] = true;
@@ -351,7 +407,7 @@ void ModeEngine::note_off(uint8_t chip_idx, uint32_t now_ms) {
         }
         return;
     }
-    release_chip(chip_idx);
+    release_chip(chip_idx, now_ms);
     // A released key (and no other held/latched/arp note) hides the readout.
     refresh_show_note();
 }
@@ -372,7 +428,7 @@ void ModeEngine::check_config(uint32_t now_ms) {
                 if (arp_enabled()) {
                     chip_in_arp_[c] = false;
                 } else {
-                    release_chip(c);
+                    release_chip(c, now_ms);
                 }
             }
         }
@@ -387,6 +443,7 @@ void ModeEngine::check_config(uint32_t now_ms) {
 }
 
 void ModeEngine::tick(uint32_t now_ms) {
+    process_pending(now_ms);
     check_config(now_ms);
     if (arp_active_) {
         advance_arp(now_ms);
@@ -419,9 +476,11 @@ void ModeEngine::random_loop_stop() {
     random_loop_ = false;
     if (last_random_note_ != 0 && midi_) {
         midi_->note_off(last_random_note_);
+        cancel_pending(last_random_note_, true);
     }
     last_random_note_ = 0;
     next_random_ms_ = 0;
+    ui_repaint_ = true;
 }
 
 void ModeEngine::random_loop_start(uint8_t anchor, uint32_t now_ms) {
@@ -441,23 +500,26 @@ void ModeEngine::advance_random(uint32_t now_ms) {
     }
     const Pattern& p = state_->active_pattern();
     const uint8_t picked = pick_random_note(random_anchor_);
+    const uint32_t attack = gate_attack_ms();
+    const uint32_t release = gate_release_ms();
     if (picked == last_random_note_ && last_random_note_ != 0) {
         // Keep the note ringing; only retrigger when a different tone is drawn.
-        next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
+        next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
         return;
     }
     if (last_random_note_ != 0 && midi_) {
-        midi_->note_off(last_random_note_);
+        schedule_pending(now_ms + release, last_random_note_, false);
     }
     last_random_note_ = picked;
     if (midi_) {
-        midi_->note_on(picked, 100);
+        schedule_pending(now_ms + attack, picked, true);
     }
     if (state_ != nullptr) {
         state_->runtime.last_note = picked;
         state_->runtime.show_note = true;
     }
-    next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
+    ui_repaint_ = true;
+    next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
 }
 
 uint8_t ModeEngine::pick_random_note(uint8_t anchor) {
@@ -479,6 +541,92 @@ uint8_t ModeEngine::pick_random_note(uint8_t anchor) {
         return static_cast<uint8_t>(midi);
     }
     return anchor;
+}
+
+// -- Delayed note events (gate attack/release, voicing strum, timing) -------
+
+uint32_t ModeEngine::gate_attack_ms() const {
+    if (state_ == nullptr || !state_->active_pattern().gate.enabled) {
+        return 0;
+    }
+    return state_->active_pattern().gate.attack_ms;
+}
+
+uint32_t ModeEngine::gate_release_ms() const {
+    if (state_ != nullptr && state_->active_pattern().gate.enabled) {
+        return state_->active_pattern().gate.release_ms;
+    }
+    return 0;
+}
+
+void ModeEngine::clear_pending() {
+    for (uint8_t i = 0; i < kMaxPendingEvents; ++i) {
+        pending_[i].active = false;
+    }
+}
+
+void ModeEngine::cancel_pending(uint8_t note, bool on) {
+    for (uint8_t i = 0; i < kMaxPendingEvents; ++i) {
+        if (pending_[i].active && pending_[i].on == on && pending_[i].note == note) {
+            pending_[i].active = false;
+        }
+    }
+}
+
+void ModeEngine::schedule_pending(uint32_t at_ms, uint8_t note, bool on) {
+    // Reuse an expired/free slot; if the ring is still full, fire immediately
+    // (deterministic fallback rather than silently dropping the event).
+    for (uint8_t i = 0; i < kMaxPendingEvents; ++i) {
+        const uint8_t idx = static_cast<uint8_t>((pending_cursor_ + i) % kMaxPendingEvents);
+        if (!pending_[idx].active) {
+            pending_[idx].at_ms = at_ms;
+            pending_[idx].note = note;
+            pending_[idx].on = on;
+            pending_[idx].active = true;
+            pending_cursor_ = static_cast<uint8_t>((idx + 1) % kMaxPendingEvents);
+            return;
+        }
+    }
+    if (on && midi_ != nullptr) {
+        midi_->note_on(note, 100);
+    } else if (midi_ != nullptr) {
+        midi_->note_off(note);
+    }
+}
+
+void ModeEngine::process_pending(uint32_t now_ms) {
+    for (uint8_t i = 0; i < kMaxPendingEvents; ++i) {
+        const PendingEvent& e = pending_[i];
+        if (e.active && now_ms >= e.at_ms) {
+            if (e.on) {
+                if (midi_ != nullptr) {
+                    midi_->note_on(e.note, 100);
+                }
+            } else if (midi_ != nullptr) {
+                midi_->note_off(e.note);
+            }
+            pending_[i].active = false;
+        }
+    }
+}
+
+uint32_t ModeEngine::next_arp_onset(const Pattern& p, uint32_t now_ms, uint32_t interval) {
+    uint32_t base = now_ms + interval;
+    // Swing: delay the off-beat (2nd) step of each pair by a fraction of the
+    // step duration. arp_index_ is the 1-based ordinal of the fired step.
+    if (p.timing.swing_pct > 0 && (arp_index_ & 1U) == 1U) {
+        base += (static_cast<uint32_t>(interval) * p.timing.swing_pct) / 100U;
+    }
+    // Humanize: nudge each step forward by a deterministic 0..N ms jitter.
+    if (p.timing.humanize_ms > 0) {
+        base += rng_.range(p.timing.humanize_ms);
+    }
+    // Quantize: snap the onset up to the next grid boundary.
+    const uint32_t grid = quantize_grid_ms(p.timing.quantize_grid, p.timing.bpm);
+    if (grid > 0) {
+        base = ((base + grid - 1u) / grid) * grid;
+    }
+    return base;
 }
 
 }  // namespace drom

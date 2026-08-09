@@ -24,6 +24,10 @@ public:
 
     void on_arp_config_changed(uint32_t now_ms);
 
+    // True while any note is still sounding (held/latched/arp/random loop);
+    // used by the Play transport to decide whether a press should silence it.
+    bool any_active_input() const;
+
     // Continuous RandomNote mode: started by Play or by a first key press and
     // kept running until RandomNote is left or Play is pressed again. A fresh
     // random note (round a fixed anchor, filtered into the current scale) is
@@ -31,6 +35,11 @@ public:
     void random_loop_start(uint8_t anchor_octave, uint32_t now_ms);
     void random_loop_stop();
     bool random_loop_running() const { return random_loop_; }
+
+    // Polled by the main loop: true when the live note label should be
+    // repainted although no physical input happened (arp step advance,
+    // random transitions). Take-and-clear semantics.
+    bool take_ui_dirty();
 
 private:
     bool arp_enabled() const;
@@ -44,13 +53,30 @@ private:
     void advance_arp(uint32_t now_ms);
     void schedule_next_step(uint32_t now_ms);
     void advance_random(uint32_t now_ms);
-    void release_chip(uint8_t chip_idx);
+    void release_chip(uint8_t chip_idx, uint32_t now_ms);
     void check_config(uint32_t now_ms);
     uint8_t pick_random_note(uint8_t anchor);
-    // True while any note is still sounding (held/latched/arp/random loop).
-    bool any_active_input() const;
     // Sync runtime.show_note with any_active_input(); call after note_off etc.
     void refresh_show_note();
+
+    // -- Delayed note events (gate attack/release, voicing strum, timing) -----
+    struct PendingEvent {
+        uint32_t at_ms {0};
+        uint8_t note {0};
+        bool on {false};
+        bool active {false};
+    };
+    static constexpr uint8_t kMaxPendingEvents = 48;
+    std::array<PendingEvent, kMaxPendingEvents> pending_ {};
+    uint8_t pending_cursor_ {0};
+
+    uint32_t gate_attack_ms() const;
+    uint32_t gate_release_ms() const;
+    void clear_pending();
+    void cancel_pending(uint8_t note, bool on);
+    void schedule_pending(uint32_t at_ms, uint8_t note, bool on);
+    void process_pending(uint32_t now_ms);
+    uint32_t next_arp_onset(const Pattern& p, uint32_t now_ms, uint32_t interval);
 
     UsbMidi* midi_ {nullptr};
     AppState* state_ {nullptr};
@@ -85,6 +111,9 @@ private:
     uint8_t random_anchor_ {60};  // GC4
     uint8_t last_random_note_ {0};
     uint32_t next_random_ms_ {0};
+
+    // Set whenever the note readout changed outside of input handling.
+    bool ui_repaint_ {false};
 };
 
 }  // namespace drom

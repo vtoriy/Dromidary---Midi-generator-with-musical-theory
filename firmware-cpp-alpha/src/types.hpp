@@ -103,11 +103,22 @@ enum class ArpStyle : uint8_t {
     Off = 0,
     Up,
     Down,
-    UpDown,
-    DownUp,
-    AsPlayed,
-    Random,
-    ConvergeDiverge,
+    UpDown,          // волна вверх-вниз, крайние ноты по разу
+    DownUp,          // то же, от верхней к нижней
+    UpDownRep,       // Up & Down: волна, крайние ноты повторяются на развороте
+    DownUpRep,       // Down & Up: зеркально
+    Converge,        // с внешних нот к центру аккорда
+    Diverge,         // из центра к крайним
+    ConvergeDiverge, // Con&Diverge: оба хода в одном цикле
+    PinkyUp,         // верхняя нота = педаль, остальные восходят между её нотами
+    PinkyUpDown,     // педаль-верх + остальные волной вверх-вниз
+    ThumbUp,         // нижняя нота = остинато-бас, остальные восходят поверх
+    ThumbUpDown,     // бас-педаль + остальные волной
+    AsPlayed,        // Play Order: в порядке нажатия клавиш
+    ChordTrigger,    // аккорд целиком повторяется на каждом шаге (ритм-гейт)
+    Random,          // непрерывно случайная последовательность
+    RandomOnce,      // один случайный паттерн, закреплён на время аккорда
+    RandomOther,     // случайный порядок без повторов внутри цикла
     kCount,
 };
 
@@ -147,16 +158,18 @@ struct ArpCfg {
     bool enabled {false};
     bool latch {false};
     RateMode rate_mode {RateMode::Note};
-    uint8_t rate_note_index {2};  // index into kArpNoteDivs => "1/8"
-    uint16_t rate_ms {100};       // 10..2000 step 10
-    uint8_t range_semitones {12};
-    uint8_t num_steps {8};
+    uint8_t rate_note_index {6};      // индекс в kArpNoteDivs => "1/8" (доли такта)
+    uint16_t rate_ms {100};           // Rate (Free): 10..2000 мс, шаг 10
+    uint8_t distance_semitones {12};  // Distance: интервал транспонирования (полутоны, 0..48; 12 = октава)
+    uint8_t steps {1};                // Steps: сколько доп. транспозиций (позиций = steps+1; 0 = только исходная высота)
+    uint8_t cycle {8};                // Cycle: длина цикла арпеджио в шагах (1..32)
     ArpStyle style {ArpStyle::Up};
 };
 
 struct TimingCfg {
-    uint8_t swing_pct {0};
-    uint8_t humanize_ms {0};
+    uint16_t bpm {120};           // темп, 20..300
+    uint8_t swing_pct {0};        // 0..100
+    uint8_t humanize_ms {0};      // 0..50
     uint8_t quantize_grid {0};    // index into kQuantizeGrids
     bool legato {false};
 };
@@ -190,7 +203,6 @@ struct ClickSettings {
 struct Pattern {
     std::array<Step, kStepCountMax> steps {};
     uint8_t length {16};
-    uint16_t bpm {120};
     KeyFilterCfg key_filter {};
     ChordCfg chord {};
     ArpCfg arp {};

@@ -34,7 +34,6 @@ struct Step {
 struct Pattern {
     std::array<Step, kStepCountMax> steps {};
     uint8_t length {16};               // 16/32/48/64
-    uint16_t bpm {120};                // 20..300
     KeyFilterCfg key_filter {};
     ChordCfg     chord {};
     ArpCfg       arp {};
@@ -65,31 +64,36 @@ struct ChordCfg {
 struct ArpCfg {
     bool enabled {false};
     bool latch {false};
-    RateMode rate_mode {RateMode::Note}; // Note (деления) / Ms (мс)
-    uint8_t rate_note_index {2};         // индекс в kArpNoteDivs => "1/8"
-    uint16_t rate_ms {100};              // 10..2000, шаг 10
-    uint8_t range_semitones {12};        // по умолчанию одна октава
-    uint8_t num_steps {8};               // длина цикла арпеджио (1..32)
+    RateMode rate_mode {RateMode::Note};  // Note (доли такта) / Ms (Free)
+    uint8_t rate_note_index {6};          // индекс в kArpNoteDivs => "1/8"
+    uint16_t rate_ms {100};               // Rate (Free): 10..2000, шаг 10
+    uint8_t distance_semitones {12};      // Distance: интервал транспонирования, полутоны (0..48; 12 = октава)
+    uint8_t steps {1};                    // Steps: кол-во доп. транспозиций (позиций = steps+1; 0 = только исходная высота)
+    uint8_t cycle {8};                    // Cycle: длина цикла арпеджио в шагах (1..32)
     ArpStyle style {ArpStyle::Up};
 };
 
 struct TimingCfg {
-    uint8_t swing_pct {0};
-    uint8_t humanize_ms {0};
-    uint8_t quantize_grid {0};         // индекс в kQuantizeGrids
-    bool legato {false};
-    // Примечание: редактируются в меню, к MIDI-выводу в alpha не применяются.
+    uint16_t bpm {120};          // темп, 20..300
+    uint8_t swing_pct {0};       // задержка "off-beat" шага арпа (0..100)
+    uint8_t humanize_ms {0};     // псевдослучайный сдвиг шага арпа (0..50)
+    uint8_t quantize_grid {0};   // индекс в kQuantizeGrids (0 = Off)
+    bool legato {false};         // перехлёст нот арпа (без разрыва)
 };
 
 struct GateCfg {
     bool enabled {false};
-    uint16_t attack_ms {0};
-    uint16_t decay_ms {0};
-    uint8_t sustain_pct {100};
-    uint16_t release_ms {0};
-    bool sync_quantize {false};
-    // Примечание: редактируются в меню, к MIDI-выводу в alpha не применяются.
+    uint16_t attack_ms {0};        // задержка Note On (0..2000)
+    uint16_t decay_ms {0};         // зарезервировано (нет velocity-выхода)
+    uint8_t sustain_pct {100};     // зарезервировано (нет velocity-выхода)
+    uint16_t release_ms {0};       // продление Note Off (0..2000)
+    bool sync_quantize {false};    // true = "quantize" sync (gate_cfg.sync)
 };
+```
+
+> `attack_ms`/`release_ms` активны при `gate.enabled == true` и применяются в
+> live-выводе через очередь отложенных событий `ModeEngine::pending_`
+> (см. `02-midi-chain.md`, этапы 5–8). `decay_ms`/`sustain_pct` на MIDI не влияют.
 
 struct TransposeCfg {
     int8_t semitones {0};              // -12..+12
@@ -180,8 +184,10 @@ enum class ChordType   { Off, Major, Minor, Diminished, Augmented, Maj7, Min7, D
                          S7sh5, S7sh9, S7b9, S7sh11, Sus2, Sus4, S7sus4, Sus2_7,
                          Quartal, Quintal, Cluster, Power, kCount };
 enum class VoicingMode { Block, Strum, Roll, kCount };
-enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, AsPlayed, Random,
-                         ConvergeDiverge, kCount };
+enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, UpDownRep, DownUpRep,
+                         Converge, Diverge, ConvergeDiverge,
+                         PinkyUp, PinkyUpDown, ThumbUp, ThumbUpDown,
+                         AsPlayed, ChordTrigger, Random, RandomOnce, RandomOther, kCount };
 enum class RateMode    { Note, Ms, kCount };
 ```
 
@@ -224,13 +230,13 @@ struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_cou
 
 ## Таблицы вариантов (label → enum)
 
-- `kArpNoteDivs` (7): `"1/64","1/32","1/16","1/8","1/4","1/2","1/1"`.
+- `kArpNoteDivs` (12, включая триоли): `"1/64","1/48","1/32","1/24","1/16","1/12","1/8","1/6","1/4","1/3","1/2","1/1"`.
 - `kScaleFullLabels` (16) — соответствуют `ScaleId` в порядке enum.
 - `kCTypeFullLabels` (26) — соответствуют `ChordType` (без Off), порядок enum.
-- `kAStyleFullLabels` (8) — соответствуют `ArpStyle`.
+- `kAStyleFullLabels` (19) — соответствуют `ArpStyle` в порядке enum (см. полный список в `types.hpp`).
 - `kQuantizeLabels` (8): Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4.
 - `kShapeLabels` (4): Asc, Desc, Arch, Rnd.
 - Радиальные (8 зон): `kScaleRadialLabels` = Off,Maj,Min,Dor,Phr,Lyd,Mix,Blu;
   `kCTypeRadialLabels` = Off,Maj,Min,Maj7,Min7,7,Sus4,Pow;
   `kAStyleRadialLabels` = Off,Up,Down,UpDn,DnUp,Play,Rnd,CvDv;
-  `kStrumLabels` = Off,5,10,15,20,25,30,35 (мс).
+  `kStrumLabels` = Off,10,20,30,40,50,75,100 (мс).

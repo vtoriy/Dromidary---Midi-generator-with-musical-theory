@@ -27,7 +27,7 @@ DETAIL и MAIN используют общую модель «список па�
 | Rest + клик джойстика | Сброс значения к снимку (в любом меню) |
 | Двойной клик (~double_ms, 300 мс) | Сброс в DETAIL/MAIN (доп. к Rest+клик) |
 | Shift + наклон | Прыжок к крайнему значению (min/max) |
-| Удержание джойстика в направлении | Авто-повтор (навигация/ввод) с интервалом ~220 мс |
+| Удержание джойстика в направлении | Авто-повтор с ускорением: ~220 мс → 150 → 110 → 60 мс, на 3-м уровне по 3 шага за тик (`app_loop.cpp`) |
 
 Тайминги кликов настраиваются: System → Debounce / Click 2x / Click Lng
 (см. `03-data-structures.md`, ClickSettings) и сохраняются во flash.
@@ -45,19 +45,20 @@ AStyle, Strum), джойстик работает как радиальный с
 направлению** (см. `menu_items.cpp` — `direction_to_zone()`):
 
 | Zone | Направление | Scale | CType | AStyle | Strum |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 0 | Вверх | **Off** | **Off** | **Off** | **Off** |
-| 1 | Вверх-вправо | Major | Maj | Up | 5 мс |
-| 2 | Вправо | Minor | Min | Down | 10 |
-| 3 | Вниз-вправо | Dorian | Maj7 | Up-Down | 15 |
-| 4 | Вниз | Phrygian | Min7 | Down-Up | 20 |
-| 5 | Вниз-влево | Lydian | Dom7 | As Played | 25 |
-| 6 | Влево | Mixolydian | Sus4 | Random | 30 |
-| 7 | Вверх-влево | Blues | Power | Converge/Diverge | 35 |
+| 1 | Вверх-вправо | Major | Maj | Up | 10 мс |
+| 2 | Вправо | Minor | Min | Down | 20 |
+| 3 | Вниз-вправо | Dorian | Maj7 | Up-Down | 30 |
+| 4 | Вниз | Phrygian | Min7 | Down-Up | 40 |
+| 5 | Вниз-влево | Lydian | Dom7 | As Played | 50 |
+| 6 | Влево | Mixolydian | Sus4 | Random | 75 |
+| 7 | Вверх-влево | Blues | Power | Converge/Diverge | 100 |
 
 Зона 0 (вверх) в Scale/CType/AStyle = **Off** (блок выключен). Выбор Scale≠Off
 автоматически включает Key Filter; CType≠Off включает Chord; AStyle≠Off включает
 Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN есть).
+Strum-зоны теперь идут с шагом 10 мс до 100 мс (раньше до 35 мс, шаг 5).
 
 ## QUICK — главный экран (реально построенные строки, `build_quick_rows`)
 
@@ -67,11 +68,17 @@ Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN ест
 |---|---|---|
 | **Mode** | Toggle `KB` / `RND` | переключение MIDI-клавиатура ↔ случайная нота (клик подтверждает) |
 | **Key** | Linear `Key` (12 нот) + Radial `Scale` + `PRM` | Scale — зоны, Key — линейный (только выбираемая нота) |
-| **CHD** (только KB/RND/MidiFilter) | Radial `CType` + Radial `Strum` + `PRM` | порох, блок аккордов |
-| **Arp** (только KB/MidiFilter) | Radial `AStyle` + Toggle `Latch` + `PRM` | арпеджиатор |
+| **CHD** (только KB/RND/MidiFilter) | Radial `Type` + Radial `Strum` + `PRM` | порох, блок аккордов |
+| **Arp** (только KB/MidiFilter) | Radial `Style` + Toggle `Latch` + `PRM` | арпеджиатор |
+| **Time** (всегда) | Radial `Swing` + Radial `Hum` + `PRM` | тайминг, влияет на арп; PRM → BPM/Swing/Human/Quant/legato |
 | **ADR** (всегда) | сводка On/Off, клик → DETAIL | блок ADSR: Switch, Atk, Dec, Sus, Rel, Sync |
 | **Dens** (только RND) | Linear `Dens` (0..100) | плотность/вероятность |
 | **Shape** (только RND) | Linear `Shape` (Asc/Desc/Arch/Rnd) | форма |
+
+Над строками QUICK выводится **строка подписей** параметров сфокусированной
+строки (например `Type Strum PRM`), чтобы всегда было понятно, какая ячейка что
+редактирует. Подписи обрезаются до ширины ячейки (макс. 5 символов × 6 px), поэтому
+строка целиком помещается в 132 px.
 
 Клик-цикл ячеек QUICK (кроме чеков/`PRM`): клик → edit mode (ячейка выделяется),
 джойстик меняет значение (линейные — влево/вправо, радиальные — зоны), повторный
@@ -90,8 +97,7 @@ Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN ест
 Main
 ├── Pattern
 │   ├── Slot            (0–15)
-│   ├── Length          (16 / 32 / 48 / 64)
-│   └── BPM             (20–300)
+│   └── Length          (16 / 32 / 48 / 64)
 ├── Key / Scale
 │   ├── Key Filter      (On / Off)
 │   ├── Root Note       (C..B, 12 нот)
@@ -104,16 +110,20 @@ Main
 │   │                    m7b5, Dim7, 9, 11, 13, Maj9, 7#5, 7#9, 7b9, 7#11,
 │   │                    Sus2, Sus4, 7s4, s2/7, Qrt, Qnt, Cls, Pow)
 │   ├── Voicing         (Blk / Strm / Roll)
-│   └── Strum           (1–100 мс)
+│   └── Strum           (1–150 мс)
 ├── Arpeggiator
 │   ├── Arp             (On / Off)
 │   ├── Latch           (On / Off)
-│   ├── Style           (полные 8: Off, Up, Down, UpDn, DnUp, Play, Rnd, CvDv)
-│   ├── RateMode        (Note / Ms)
-│   ├── Rate            (Note: 1/64..1/1; Ms: 10–2000 мс шаг 10)
-│   ├── Range           (0–48 полутонов)
-│   └── Steps           (1–32)
+│   ├── Style           (полные 19: Off, Up, Down, UpDn, DnUp, Up&Dn, Dn&Up,
+│   │                    Converge, Diverge, C&Div, PinkUp, PinkDn, ThmbUp,
+│   │                    ThmbUD, PlayOrd, Chord, Rnd, Rnd1, RndO)
+│   ├── RateMode        (Note / Free)
+│   ├── Rate            (Note: 1/64..1/1 все, включая триоли; Free: 10–2000 мс шаг 10)
+│   ├── Distance        (0–48 полутонов; шаг транспонирования, 12 = октава)
+│   ├── Steps           (0–16 доп. транспозиций; позиций = Steps+1)
+│   └── Cycle           (1–32 шагов)
 ├── Timing
+│   ├── BPM             (20–300)
 │   ├── Swing           (0–100%)
 │   ├── Humanize        (0–50 мс)
 │   ├── Quantize        (Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4)
