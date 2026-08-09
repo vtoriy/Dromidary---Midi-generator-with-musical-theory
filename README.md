@@ -1,84 +1,76 @@
 # 🎹 dromidary — MIDI Groovebox / Sequencer for Raspberry Pi Pico
 
-```
- ______  __  __   ____   ____   ____    __    __   ____    ______   __    __   ____
-/\__  _\/\ \/\ \ /\  _`\/\  _`\/\  _`\ /\ \  /\ \ /\  _`\ /\  _  \ /\ \  /\ \ /\  _`\
-\/_/\ \/\ \ \_\ \\ \ \L\ \ \ \L\ \ \,\L\_\ \ \ \ \ \ \ \L\_\ \ \L\ \\ \ \ \ \ \\ \ \L\_\
-   \ \ \ \ \  _  \\ \ ,__/\ \ ,__/\ \_\ \_\ \ \ \ \ \ \ \ \L\ \ \  __ \ \ \ \ \ \\ \  _\L
-    \ \ \ \ \ \ \ \\ \ \\ /\ \ \\ /\ \ \\ \ \ \_\ \ \ \ \_\ \ \ \ \ \ \ \ \ \ \\ \ \L\ \
-     \ \_\ \ \_\ \_\ \_\ \ \ \_\ \ \ \ \ \ \ \_____\ \ \____/\ \_\ \_\ \ \____ \ \_\ \ \____/
-      \/_/  \/_/\/_/\/_/  \/_/   \/  \_\_\/______ \/___/  \/_/\/_/ \/____/ \/_/\/___/\/___/
-```
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Language: Python](https://img.shields.io/badge/Language-Python-3776AB.svg)]()
+[![Language: C++](https://img.shields.io/badge/Language-C%2B%2B17-00599C.svg)]()
 [![MCU: RP2040](https://img.shields.io/badge/MCU-RP2040-DC143C.svg)]()
-[![Firmware: CircuitPython](https://img.shields.io/badge/CircuitPython-10.0.3-1E90FF.svg)]()
+[![Firmware: Pico SDK](https://img.shields.io/badge/Pico_SDK-1.5.x-1E90FF.svg)]()
 [![MIDI: USB](https://img.shields.io/badge/MIDI-USB%20MIDI-orange.svg)]()
-[![Status: active](https://img.shields.io/badge/Status-active-brightgreen.svg)]()
+[![Build: alpha](https://img.shields.io/badge/Status-alpha-brightgreen.svg)]()
 
-Аппаратный **MIDI-контроллер / секвенсор / грувбокс** на базе **Raspberry Pi Pico
-(RP2040)**. Прошивка написана на **Adafruit CircuitPython 10.0.3**.
+Аппаратный **MIDI-контроллер / грувбокс** на базе **Raspberry Pi Pico (RP2040)**.
+Прошивка — на **C++17 (Pico SDK 1.5.x)** + **TinyUSB**.
 
-Устройство **не содержит звукового движка** — это чистый **MIDI-генератор и
-процессор**:
-
-> 🎛️ Принимает ввод с **16 нотных кнопок**, **6 функциональных кнопок** и
-> **джойстика KY-023** → обрабатывает через конвейер (тональность, аккорды,
-> арпеджио, тайминг) → отправляет **MIDI-события** по **USB MIDI**.
-> В перспективе — аппаратный **UART MIDI DIN**.
+> Устройство **не содержит звукового движка** — это чистый **MIDI-генератор и
+> процессор**: принимает ввод с **16 нотных кнопок**, **6 функциональных кнопок**
+> и **джойстика KY-023**, обрабатывает его через конвейер (тональность → аккорды →
+> арпеджио) и отправляет **MIDI Note On/Off** и **CC** по **USB MIDI**.
 
 ---
 
-## ✨ Возможности
+## ✨ Возможности (alpha)
 
 | 🚀 | Фича | Что делает |
 |---|---|---|
-| 🎼 | **Key / Scale Quantizer** | Фильтр нот по тональности: snap-up, snap-down или mute «неправильной» ноты |
-| 🎹 | **Chord Builder** | 26 типов аккордов (трезвучия, 7-е, sus, альтерации, quartal/quintal, cluster, power) + манеры block / strum / roll |
-| ⏺️ | **Pattern Sequencer** | Запись в реальном времени (overdub), пошаговое редактирование, 16 слотов в ОЗУ |
-| 🔁 | **Arpeggiator** | 7 стилей (Up, Down, Up-Down, Down-Up, As-Played, Random, Converge/Diverge), частота в нотах (1/64–1/1) или в мс, диапазон, длина цикла, **latch** |
-| 🎚️ | **ADSR Gate** | Attack/Decay/Sustain/Release как модель gate-тайминга (без velocity) |
-| ⬆️ | **Transpose** | Сдвиг в полутонах и октавах (до Key Filter) |
-| 🎲 | **Random Generator** | Случайные паттерны и ноты с настраиваемой плотностью, диапазоном, формой |
-| ⏱️ | **Timing FX** | Swing/groove, humanize, триоли/квантизация, legato |
-| 🥁 | **BPM & Time Signature** | Темп и размер такта, внутренний генератор |
-| 🔄 | **MIDI IN → MIDI OUT** | Устройство как MIDI-процессор «в разрыв» |
+| 🎼 | **Key / Scale Quantizer** | 16 ладов; «неправильные» ноты: snap-up, snap-down или mute |
+| 🎹 | **Chord Builder** | 26 типов аккордов (triads, 7th, sus, altered, quartal/quintal, cluster, power) |
+| 🔁 | **Arpeggiator** | 8 стилей (Up, Down, Up-Down, Down-Up, As Played, Random, Converge/Diverge, Off), rate в нотах (1/64–1/1) или мс, range, steps, **latch** |
+| 🎵 | **RandomNote** | Непрерывная генерация случайных нот вокруг якоря клавиши/Play, с фильтром в тональность |
+| 🎚️ | **Полифонический live-арпеджио** | Все зажатые клавиши объединяются в один аккорд → единый арп-цикл |
+| ⬆️ | **Transpose / Octave** | Полутоны и октавы (до Key Filter); базовая октава клавиатуры 1–8 |
+| 🎛️ | **Quick / Detail / Main меню** | Быстрые ячейки, радиальный селектор (8 зон), полное дерево, сброс Rest+клик |
+| ⚙️ | **Persist во flash** | Тайминги кликов (debounce/double/long) сохраняются в последний сектор |
+| 🎛️ | **Timing-эффекты** | Swing/humanize/quantize/legato — применяются к live-арпеджио |
+| 🎚️ | **Gate/ADSR** | Attack задерживает Note On, release продлевает Note Off |
+| 🎸 | **Voicing** | Block / Strum / Roll (с `strum_delay_ms`) для аккордов в live |
+| 🔬 | **Экран Test** | Диагностика распиновки кнопок (System → Test), выход Shift+клик |
+| 🎚️ | **CC-дубли** | Функц. кнопки дублируются MIDI CC 20–25 на канале 16 для DAW |
+
+**Не реализовано (отложено):** паттерн-секвенсор (запись/воспроизведение),
+режимы Random Pattern / Pattern / MIDI Filter, UART MIDI DIN, MIDI Clock,
+сохранение паттернов. Timing/ADSR/voicing — реализованы (см. таблицу выше).
+Подробно — [`midi-groovebox-docs/07-roadmap-open-questions.md`](midi-groovebox-docs/07-roadmap-open-questions.md).
 
 ---
 
-## 🧬 Архитектура конвейера обработки ноты
+## 🧬 Конвейер обработки ноты
 
-Порядок этапов фиксирован и согласован с заказчиком:
+Порядок фиксирован (детали — [`02-midi-chain.md`](midi-groovebox-docs/02-midi-chain.md)):
 
 ```
-Нотная клавиша
-     │
-     ▼
-┌────────────┐   ┌────────────┐   ┌──────────────┐   ┌──────────────────┐   ┌────────────┐
-│ Key Filter │──▶│   Chord    │──▶│  Arpeggiator │──▶│ Timing (swing /   │──▶│ Gate / ADSR │
-│ (тональн.)  │   │  Builder   │   │  + range     │   │  humanize / quant │   │  (тайминг)  │
-└────────────┘   └────────────┘   └──────────────┘   │  / legato)        │   └────────────┘
-                                                      └──────────────────┘        │
-                                                                                 ▼
-                                                                          USB MIDI OUT
+Нотная клавиша (или RandomNote)
+      │
+      ▼
+Transpose ──► Key Filter ──► Chord Builder ──► secondary filter ──► Arpeggiator
+(± полутоны/октавы)  (16 ладов)  (26 типов)   (структура в лад)     (live-цикл)
+      │                                                              │
+      ▼                                                              ▼
+  Timing (swing/humanize/quantize/legato)                     Gate/ADSR + Voicing
+                                                              (attack/release, Strum/Roll)
+      └───────────────────────────────────────────────────────────────▼
+                                                                  USB MIDI OUT
 ```
-
-> ℹ️ Подробно: [`midi-groovebox-docs/02-midi-chain.md`](midi-groovebox-docs/02-midi-chain.md)
 
 ---
 
-## 🕹️ Режимы работы
+## 🕹️ Режимы (в alpha доступны 2)
 
-| Режим | Описание |
-|---|---|
-| 🎹 `midi_keyboard` | Клавиатура: ноты → аккорды/арпеджио live |
-| ⏺️ `pattern` | Воспроизведение записанного паттерна |
-| 🎲 `random_pattern` | Генерация и игра случайного паттерна |
-| 🎵 `random_note` | Случайные ноты из диапазона/формы |
-| 🔄 `midi_filter` | MIDI IN → конвейер → MIDI OUT |
+| Режим | Как включить | Описание |
+|---|---|---|
+| 🎹 **MIDI-клавиатура (KB)** | по умолчанию | Live-игра: Key Filter → аккорды → полифонический арпеджио |
+| 🎵 **Случайная нота (RND)** | Quick → ячейка **Mode** | Непрерывный поток случайных нот вокруг якоря нажатой клавиши |
 
-См. матрицу доступности: [`06-mode-matrix.md`](midi-groovebox-docs/06-mode-matrix.md)
+`Pattern`, `RandomPattern`, `MidiFilter` — зарезервированы (требуют секвенсора и
+MIDI IN). См. [`06-mode-matrix.md`](midi-groovebox-docs/06-mode-matrix.md).
 
 ---
 
@@ -87,84 +79,87 @@
 | Компонент | Детали |
 |---|---|
 | 🧠 MCU | Raspberry Pi Pico, **RP2040** |
-| 💾 Прошивка | Adafruit CircuitPython **10.0.3** |
-| 🖥️ Дисплей | OLED **SH1106**, I2C, 132×64 px |
-| 🎹 Нотные кнопки | **16** шт. (12 нот + октавы) |
-| ⚙️ Функциональные кнопки | **6** шт. (Play, Record, Shift, Rest, Oct Down, Oct Up) |
-| 🔌 Чтение кнопок | 2 каскадных **74HC165** (24 бита) |
-| 🕹️ Джойстик | **KY-023** (аналоговый X/Y + кнопка) |
+| 💾 Прошивка | C++17, **Pico SDK 1.5.x**, TinyUSB |
+| 🖥️ Дисплей | OLED **SH1106**, I2C0, 132×64 px, адрес 0x3C |
+| 🎹 Нотные кнопки | **16** шт. (1–12 = C..B текущей октавы, 13–16 = C–D# октавой выше) |
+| ⚙️ Функц. кнопки | **6** шт.: Play, Rest, Record, Shift, Oct Down, Oct Up |
+| 🔌 Чтение кнопок | Каскад **74HC165** (24 бита, Latch=GP2, Clock=GP3, Data=GP4) |
+| 🕹️ Джойстик | **KY-023** (X=GP26, Y=GP27, кнопка=GP15) |
 | 🎧 MIDI | **USB MIDI** (сейчас); **UART MIDI DIN** (план) |
 
-> ⚠️ **Известный аппаратный баг**: на втором 74HC165 перепутаны провода в диапазоне
-> D4–D7. Подробности — [`01-hardware.md`](midi-groovebox-docs/01-hardware.md).
+> ⚠️ **Известный аппаратный баг**: на втором 74HC165 перепутаны провода в
+> диапазоне D4–D7. Оставлено как есть (физическая разводка настроена).
+> Подробности — [`01-hardware.md`](midi-groovebox-docs/01-hardware.md).
 
 ---
 
 ## 🖱️ Управление
 
-- **Нотные клавиши** — игра/запись нот; с Shift — числовой ввод значений.
-- **Кнопки**: Play/Stop, Record (overdub), Shift, Rest (тишина/пауза), Octave.
-- **Джойстик** — навигация по меню, радиальный селектор аккордов/арпеджио,
-  ввод значений (удержание = авто-повтор с ускорением).
-- **Экраны**: Quick (быстрые настройки) → Full/MAIN (полное меню) → Animation.
+- **Нотные клавиши** — игра нот; октава — Oct Up/Dn.
+- **Play** — старт/стоп (в RND — запуск/остановка цикла случайной ноты);
+  **Rest** — live-mute пока зажата; **Rest + клик джойстика** — сброс значения.
+- **Джойстик** — навигация по меню, радиальный селектор (Scale/Chord/Style/Strum),
+  ввод значений (±1), удержание — авто-повтор, Shift+наклон — крайние значения.
+- **Экраны**: Quick (быстрые ячейки) → Full/MAIN (полное меню) → Animation —
+  long-press джойстика на корне.
+- **Экран Test** — Full → System → Test (диагностика распиновки, выход Shift+клик).
 
 ---
 
 ## 📦 Установка на Pico
 
-1. ⬇️ Установите **Adafruit CircuitPython 10.x** на Raspberry Pi Pico
-   ([circuitpython.org](https://circuitpython.org/board/raspberry_pi_pico/)).
-2. 📁 Скопируйте `code.py` и все `*.py` в корень диска `CIRCUITPY`.
-3. 📂 Скопируйте содержимое `lib/` в папку `lib/` на диске.
-4. 🔌 Подключите дисплей / кнопки / джойстик по распиновке из
-   [`midi-groovebox-docs/01-hardware.md`](midi-groovebox-docs/01-hardware.md).
-5. 🚀 Подключите Pico по USB — устройство появится как MIDI-инструмент.
+Прошивка собирается из исходников C++ (Pico SDK). Подробные шаги — в
+[`firmware-cpp-alpha/README.md`](firmware-cpp-alpha/README.md). Коротко:
+
+1. ⬇️ Установите тулчейн: **CMake 3.13+**, **Ninja**, **ARM GCC** (arm-none-eabi).
+2. 📦 Склонируйте **Pico SDK 1.5.x** и задайте `PICO_SDK_PATH`.
+3. 🔨 Соберите:
+
+   ```sh
+   cmake -B build -G Ninja
+   cmake --build build
+   ```
+
+4. 🔌 Зажмите **BOOTSEL** и подключите Pico по USB → появится диск `RPI-RP2`.
+5. 📁 Скопируйте `build/dromidary_cpp_alpha.uf2` на диск `RPI-RP2`.
+
+После перезагрузки устройство появится как **USB MIDI**-инструмент.
 
 ---
 
 ## 🗂️ Структура проекта
 
-| Файл | Назначение |
-|---|---|
-| `code.py` | Главный цикл: чтение ввода, дисплей, роутинг событий |
-| `hardware.py` | Чтение 74HC165 и джойстика KY-023 |
-| `midi.py`, `midi_chain.py` | MIDI-вывод и конвейер обработки ноты |
-| `key_filter.py` | Фильтр по тональности |
-| `chord_builder.py` | Генератор аккордов + voicing |
-| `arpeggiator.py` | Стили арпеджио и диапазон |
-| `timing_effects.py` | Swing, humanize, quantize, legato |
-| `gate_adsr.py` | ADSR как gate-тайминг |
-| `mode_engine.py` | Конечный автомат режимов + live-арпеджио |
-| `sequencer.py` | Паттерн-секвенсор (play/stop, scheduling) |
-| `state.py`, `state_manager.py` | Структуры данных паттерна/слотов |
-| `menu.py`, `renderer.py`, `display.py` | Меню (Quick/DETAIL/MAIN/Animation) и рендер |
-| `lib/` | Библиотеки Adafruit (`.mpy`) для дисплея |
+```
+firmware-cpp-alpha/          ← прошивка (C++17, Pico SDK)
+├── src/
+│   ├── main.cpp, app_loop.* → точка входа и главный цикл
+│   ├── types.hpp            → все структуры данных/конфиги
+│   ├── persist.*            → клик-настройки во flash (CRC32)
+│   ├── engine/              → key_filter, chord_builder, arpeggiator, midi_chain
+│   ├── mode/                → mode_engine (live-игра, арпеджио, RandomNote)
+│   ├── menu/                → menu_items, menu_engine, renderer, animation
+│   ├── platform/            → shift165, joystick, display_sh1106, usb_midi, board_pins
+│   └── state/               → AppState, init_default_state
+├── CMakeLists.txt           → сборка
+└── pico_sdk_import.cmake
+midi-groovebox-docs/         ← документация (рус.)
+└── 00-overview … 07-roadmap
+```
 
 ---
 
 ## 📚 Документация
 
-Полная документация — в [`midi-groovebox-docs/`](midi-groovebox-docs/README.md).
-Рекомендуемый порядок чтения:
+Полная документация (рус.) — в [`midi-groovebox-docs/`](midi-groovebox-docs/README.md):
 
-1. 🌐 [Обзор проекта](midi-groovebox-docs/00-overview.md) — что это и принятые решения
-2. 🔧 [Аппаратура](midi-groovebox-docs/01-hardware.md) — распиновка, кнопки, план UART
-3. 🧬 [Конвейер обработки ноты](midi-groovebox-docs/02-midi-chain.md) — главная логика
-4. 🧱 [Структуры данных](midi-groovebox-docs/03-data-structures.md) — pattern/step/slot
-5. 🖱️ [Навигация меню](midi-groovebox-docs/04-menu-navigation.md) — экраны, клик-циклы
-6. 🎛️ [Распределение ввода](midi-groovebox-docs/05-input-mapping.md) — кнопки, джойстик
-7. 🔀 [Матрица режимов](midi-groovebox-docs/06-mode-matrix.md) — доступность функций
-8. 🗺️ [Роадмап](midi-groovebox-docs/07-roadmap-open-questions.md) — что дальше
-
----
-
-## 🗺️ Статус и планы
-
-**Сделано:** конвейер ноты, секвенсор, меню, 5 режимов, live-арпеджио, автоповтор
-джойстика, объединённый Rate, полифонический арпеджио + Key/Chord.
-
-**В планах:** step-edit паттерна, отладка random-режимов на железе, **UART MIDI OUT**,
-MIDI IN + оптрон, **MIDI Clock sync**, сохранение слотов на flash/ПЗУ.
+1. [Обзор проекта](midi-groovebox-docs/00-overview.md) — что это, принятые решения, статус
+2. [Аппаратура](midi-groovebox-docs/01-hardware.md) — распиновка, битовая карта, Test
+3. [Конвейер ноты](midi-groovebox-docs/02-midi-chain.md) — главная логика
+4. [Структуры данных](midi-groovebox-docs/03-data-structures.md) — C++-модель
+5. [Навигация меню](midi-groovebox-docs/04-menu-navigation.md) — Quick/DETAIL/MAIN/Anim
+6. [Распределение ввода](midi-groovebox-docs/05-input-mapping.md) — кнопки, джойстик
+7. [Матрица режимов](midi-groovebox-docs/06-mode-matrix.md) — KB/RND
+8. [Роадмап](midi-groovebox-docs/07-roadmap-open-questions.md) — что дальше
 
 ---
 

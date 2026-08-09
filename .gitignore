@@ -1,14 +1,23 @@
-# Python / CircuitPython
+# opencode tooling (personal config, not part of the firmware)
+.opencode/
+
+# Python / CircuitPython (retired build)
 __pycache__/
 *.pyc
 *.pyo
-
-# Runtime artifacts from the Pico / local tests
 boot_out.txt
 test_output.txt
 
-# opencode tooling (personal config, not part of the firmware)
-.opencode/
+# C++ build artifacts (Pico SDK)
+build/
+*.uf2
+*.elf
+*.hex
+*.bin
+*.map
+
+# Pico SDK (external dependency, keep out of the repo)
+pico-sdk/
 
 # Environment / secrets
 .env
