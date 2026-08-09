@@ -11,7 +11,8 @@
 - джойстик KY-023: 8 направлений, клик, long-press, авто-повтор (~220 мс);
 - драйвер SH1106 (I2C, framebuffer + flush, инкрементальный рендер);
 - Key Filter (16 ладов) + Chord Builder (26 типов) + secondary filter;
-- полифонический live-арпеджио (8 стилей, rate note/ms, range, steps, latch);
+- полифонический live-арпеджио (19 стилей + Chord trigger, rate note/ms с
+  триолями, колонки keys×range, фильтр по тональности, steps, latch);
 - RandomNote — непрерывный генератор случайных нот (якорь по клавише/Play);
 - Quick/DETAIL/MAIN/Animation меню; сброс Rest+клик; двойной клик в DETAIL/MAIN;
 - полное дерево Full меню (10 разделов, см. `04-menu-navigation.md`);

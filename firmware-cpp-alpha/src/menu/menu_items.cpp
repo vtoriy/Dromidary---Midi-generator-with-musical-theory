@@ -44,12 +44,21 @@ const ChordType kCTypeFullIds[27] = {
 };
 constexpr int kCTypeFullCount = 26;
 
-const char* const kAStyleFullLabels[8] = {"Off", "Up", "Down", "UpDn", "DnUp", "Play", "Rnd", "CvDv"};
-const ArpStyle kAStyleFullIds[8] = {
-    ArpStyle::Off, ArpStyle::Up, ArpStyle::Down, ArpStyle::UpDown,
-    ArpStyle::DownUp, ArpStyle::AsPlayed, ArpStyle::Random, ArpStyle::ConvergeDiverge,
+const char* const kAStyleFullLabels[19] = {
+    "Off", "Up", "Down", "UpDn", "DnUp", "Up&Dn", "Dn&Up",
+    "Converge", "Diverge", "C&Div",
+    "PinkUp", "PinkDn", "ThmbUp", "ThmbUD",
+    "PlayOrd", "Chord", "Rnd", "Rnd1", "RndO",
 };
-constexpr int kAStyleFullCount = 8;
+const ArpStyle kAStyleFullIds[19] = {
+    ArpStyle::Off, ArpStyle::Up, ArpStyle::Down, ArpStyle::UpDown,
+    ArpStyle::DownUp, ArpStyle::UpDownRep, ArpStyle::DownUpRep,
+    ArpStyle::Converge, ArpStyle::Diverge, ArpStyle::ConvergeDiverge,
+    ArpStyle::PinkyUp, ArpStyle::PinkyUpDown, ArpStyle::ThumbUp, ArpStyle::ThumbUpDown,
+    ArpStyle::AsPlayed, ArpStyle::ChordTrigger, ArpStyle::Random,
+    ArpStyle::RandomOnce, ArpStyle::RandomOther,
+};
+constexpr int kAStyleFullCount = 19;
 
 const char* const kVoicingLabels[3] = {"Blk", "Strm", "Roll"};
 const VoicingMode kVoicingIds[3] = {VoicingMode::Block, VoicingMode::Strum, VoicingMode::Roll};
@@ -233,6 +242,9 @@ ItemRef emit_arp_block(MenuContent& c, Pattern& p) {
     emit(c, int_slider_io("Range",
         [&p]() { return static_cast<int32_t>(p.arp.range_semitones); },
         [&p](int32_t v) { p.arp.range_semitones = static_cast<uint8_t>(v); }, 0, 48));
+    emit(c, int_slider_io("Keys",
+        [&p]() { return static_cast<int32_t>(p.arp.keys); },
+        [&p](int32_t v) { p.arp.keys = static_cast<uint8_t>(v); }, 1, 16));
     emit(c, int_slider_io("Steps",
         [&p]() { return static_cast<int32_t>(p.arp.num_steps); },
         [&p](int32_t v) { p.arp.num_steps = static_cast<uint8_t>(v); }, 1, 32));

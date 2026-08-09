@@ -32,6 +32,11 @@ public:
     void random_loop_stop();
     bool random_loop_running() const { return random_loop_; }
 
+    // Polled by the main loop: true when the live note label should be
+    // repainted although no physical input happened (arp step advance,
+    // random transitions). Take-and-clear semantics.
+    bool take_ui_dirty();
+
 private:
     bool arp_enabled() const;
     bool latch_enabled() const;
@@ -104,6 +109,9 @@ private:
     uint8_t random_anchor_ {60};  // GC4
     uint8_t last_random_note_ {0};
     uint32_t next_random_ms_ {0};
+
+    // Set whenever the note readout changed outside of input handling.
+    bool ui_repaint_ {false};
 };
 
 }  // namespace drom

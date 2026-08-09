@@ -392,6 +392,11 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
         last_raw_ = raw;
 
         mode_.tick(now_ms);
+        // Live-note readout: repaint when the arp/random advanced the sounding
+        // note even though no physical input happened.
+        if (mode_.take_ui_dirty()) {
+            ui_dirty_ = true;
+        }
 
         // The QUICK row set depends on the play mode; when it changes (via the
         // Mode cell) rebuild the menu and silence anything still sounding.

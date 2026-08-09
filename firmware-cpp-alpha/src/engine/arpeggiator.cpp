@@ -1,5 +1,6 @@
 #include "arpeggiator.hpp"
 
+#include "key_filter.hpp"
 #include <algorithm>
 
 namespace drom {
@@ -35,128 +36,236 @@ int32_t SimpleRng::range_int(int32_t lo, int32_t hi) {
 }
 
 // ---------------------------------------------------------------------------
-// Arpeggio range + style generation (port of arpeggiator.py)
+// Arpeggio build: keyboard-column replicas -> scale filter -> style pattern
 // ---------------------------------------------------------------------------
 
 namespace {
 
-void append_range(NoteSet& out, const NoteSet& base, uint8_t range_semitones) {
-    if (range_semitones == 0) {
-        for (uint8_t i = 0; i < base.count; ++i) {
-            if (out.count < out.notes.size()) { out.notes[out.count++] = base.notes[i]; }
+uint8_t clamp_keys(uint8_t keys) {
+    if (keys == 0) { return 1; }
+    if (keys > 16) { return 16; }
+    return keys;
+}
+
+// "Шаги по клавиатуре": каждая нота базы дублируется `keys` раз, шагом
+// `range` полутонов вверх (12 = октава), затем набор фильтруется по
+// тональности и сортируется.
+NoteSet build_keyboard_set(const NoteSet& base, const ArpCfg& cfg, const KeyFilterCfg& kf) {
+    NoteSet out {};
+    const uint8_t keys = clamp_keys(cfg.keys);
+    const uint8_t step_st = cfg.range_semitones;
+    if (keys <= 1) {  // без расширения -> «как есть»
+        for (uint8_t i = 0; i < base.count && out.count < out.notes.size(); ++i) {
+            out.notes[out.count++] = base.notes[i];
         }
-        return;
+        return out;
     }
-    uint8_t min_note = base.notes[0];
-    for (uint8_t i = 1; i < base.count; ++i) {
-        if (base.notes[i] < min_note) { min_note = base.notes[i]; }
-    }
-    for (uint8_t octave = 0; octave < static_cast<uint8_t>(range_semitones / 12) + 2; ++octave) {
-        for (uint8_t i = 0; i < base.count; ++i) {
-            const uint16_t shifted = static_cast<uint16_t>(base.notes[i]) + static_cast<uint16_t>(octave) * 12;
-            if (shifted <= 127 && (shifted - min_note) <= range_semitones) {
-                if (out.count < out.notes.size()) {
-                    out.notes[out.count++] = static_cast<uint8_t>(shifted);
-                }
+    const bool filter = kf.enabled &&
+                        kf.scale != ScaleId::Off &&
+                        static_cast<uint8_t>(kf.scale) < static_cast<uint8_t>(ScaleId::kCount);
+    bool seen[128] = {};
+    for (uint8_t i = 0; i < base.count; ++i) {
+        for (uint8_t k = 0; k < keys; ++k) {
+            const uint16_t cand =
+                static_cast<uint16_t>(base.notes[i]) + static_cast<uint16_t>(k) * step_st;
+            if (cand > 127U) { break; }
+            uint8_t note = static_cast<uint8_t>(cand);
+            bool muted = false;
+            if (filter) {
+                note = key_filter_apply(note, kf, muted);
+                if (muted) { continue; }
+            }
+            if (!seen[note] && out.count < out.notes.size()) {
+                seen[note] = true;
+                out.notes[out.count++] = note;
             }
         }
+    }
+    for (uint8_t i = 1; i < out.count; ++i) {
+        const uint8_t key = out.notes[i];
+        int16_t j = static_cast<int16_t>(i) - 1;
+        while (j >= 0 && out.notes[j] > key) { out.notes[j + 1] = out.notes[j]; --j; }
+        out.notes[j + 1] = key;
+    }
+    return out;
+}
+
+void shuffle(uint8_t* arr, uint8_t n, SimpleRng& rng) {
+    for (int16_t i = static_cast<int16_t>(n) - 1; i > 0; --i) {
+        const uint8_t j = static_cast<uint8_t>(rng.range(static_cast<uint32_t>(i) + 1));
+        const uint8_t t = arr[i];
+        arr[i] = arr[j];
+        arr[j] = t;
     }
 }
 
 }  // namespace
 
-void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg,
+void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg, const KeyFilterCfg& key_filter,
                         std::array<uint8_t, kMaxArpNotes>& out, uint8_t& out_count) {
     out_count = 0;
     if (base.count == 0) {
         return;
     }
 
-    NoteSet extended {};
-    append_range(extended, base, cfg.range_semitones);
-    if (extended.count == 0) {
-        extended.notes[0] = base.notes[0];
-        extended.count = 1;
-    }
-
-    const uint8_t n = extended.count;
-    const uint8_t steps = cfg.num_steps > 0 ? cfg.num_steps : 1;
-    if (n == 1) {
-        for (uint8_t i = 0; i < steps && out_count < out.size(); ++i) {
-            out[out_count++] = extended.notes[0];
-        }
+    const NoteSet ext = build_keyboard_set(base, cfg, key_filter);
+    const uint8_t n = ext.count;
+    if (n == 0) {
         return;
     }
+    const uint8_t steps = cfg.num_steps > 0 ? cfg.num_steps : 1;
 
     const auto push = [&](uint8_t note) {
         if (out_count < out.size()) { out[out_count++] = note; }
     };
 
+    if (cfg.style == ArpStyle::ChordTrigger) {
+        for (uint8_t i = 0; i < n && i < out.size(); ++i) { out[i] = ext.notes[i]; }
+        out_count = n;
+        return;
+    }
+    if (n == 1) {
+        for (uint8_t i = 0; i < steps && out_count < out.size(); ++i) { push(ext.notes[0]); }
+        return;
+    }
+
+    SimpleRng rng(0xAC010203u ^ static_cast<uint32_t>(base.notes[0]) ^
+                  (static_cast<uint32_t>(cfg.range_semitones) << 8u) ^
+                  (static_cast<uint32_t>(cfg.keys) << 4u) ^
+                  static_cast<uint32_t>(cfg.style));
+
+    if (cfg.style == ArpStyle::RandomOnce) {
+        std::array<uint8_t, kMaxArpNotes> perm {};
+        for (uint8_t i = 0; i < n; ++i) { perm[i] = i; }
+        shuffle(perm.data(), n, rng);
+        for (uint8_t i = 0; i < n; ++i) { out[i] = ext.notes[perm[i]]; }
+        out_count = n;
+        return;
+    }
+    if (cfg.style == ArpStyle::RandomOther) {
+        std::array<uint8_t, kMaxArpNotes> perm {};
+        for (uint8_t i = 0; i < n; ++i) { perm[i] = i; }
+        for (uint8_t i = 0; i < steps; ++i) {
+            if (i % n == 0) { shuffle(perm.data(), n, rng); }
+            push(ext.notes[perm[i % n]]);
+        }
+        return;
+    }
+    if (cfg.style == ArpStyle::Random) {
+        for (uint8_t i = 0; i < steps; ++i) { push(ext.notes[rng.range(n)]); }
+        return;
+    }
+
+    // Построение индеck-паттерна для остальных стилей.
+    std::array<uint8_t, kMaxArpNotes * 2> pat {};
+    uint16_t plen = 0;
+    const auto pi = [&](uint8_t idx) {
+        if (plen < pat.size()) { pat[plen++] = idx; }
+    };
+
     switch (cfg.style) {
         case ArpStyle::Up:
         case ArpStyle::AsPlayed:
-            for (uint8_t i = 0; i < steps; ++i) { push(extended.notes[i % n]); }
+            for (uint8_t i = 0; i < n; ++i) { pi(i); }
             break;
         case ArpStyle::Down:
-            for (uint8_t i = 0; i < steps; ++i) { push(extended.notes[n - (i % n) - 1]); }
+            for (uint8_t i = 0; i < n; ++i) { pi(static_cast<uint8_t>(n - 1 - i)); }
             break;
-        case ArpStyle::UpDown: {
-            std::array<uint8_t, kMaxArpNotes * 2> pattern {};
-            uint16_t p = 0;
-            for (uint8_t i = 0; i < n; ++i) { pattern[p++] = extended.notes[i]; }
-            for (int16_t i = static_cast<int16_t>(n) - 2; i > 0; --i) { pattern[p++] = extended.notes[static_cast<uint8_t>(i)]; }
-            for (uint8_t i = 0; i < steps; ++i) { push(pattern[i % p]); }
+        case ArpStyle::UpDown:
+            for (uint8_t i = 0; i < n; ++i) { pi(i); }
+            for (int16_t i = static_cast<int16_t>(n) - 2; i > 0; --i) { pi(static_cast<uint8_t>(i)); }
+            break;
+        case ArpStyle::DownUp:
+            for (int16_t i = static_cast<int16_t>(n) - 1; i >= 0; --i) { pi(static_cast<uint8_t>(i)); }
+            for (int16_t i = 1; i + 1 < n; ++i) { pi(static_cast<uint8_t>(i)); }
+            break;
+        case ArpStyle::UpDownRep:
+            for (int16_t i = 0; i < n; ++i) { pi(static_cast<uint8_t>(i)); }
+            for (int16_t i = static_cast<int16_t>(n) - 1; i >= 0; --i) { pi(static_cast<uint8_t>(i)); }
+            break;
+        case ArpStyle::DownUpRep:
+            for (int16_t i = static_cast<int16_t>(n) - 1; i >= 0; --i) { pi(static_cast<uint8_t>(i)); }
+            for (int16_t i = 0; i < n; ++i) { pi(i); }
+            break;
+        case ArpStyle::Converge: {
+            for (uint8_t l = 0, r = static_cast<uint8_t>(n - 1); l <= r; ++l, --r) {
+                pi(l);
+                if (l != r) { pi(r); }
+            }
             break;
         }
-        case ArpStyle::DownUp: {
-            std::array<uint8_t, kMaxArpNotes * 2> pattern {};
-            uint16_t p = 0;
-            for (uint8_t i = 0; i < n; ++i) { pattern[p++] = extended.notes[n - i - 1]; }
-            for (int16_t i = static_cast<int16_t>(n) - 2; i > 0; --i) { pattern[p++] = extended.notes[static_cast<uint8_t>(i)]; }
-            for (uint8_t i = 0; i < steps; ++i) { push(pattern[i % p]); }
-            break;
-        }
-        case ArpStyle::Random: {
-            SimpleRng rng(0xAC010203u + base.notes[0]);
-            for (uint8_t i = 0; i < steps; ++i) { push(extended.notes[rng.range(n)]); }
+        case ArpStyle::Diverge: {
+            const uint8_t lo_c = static_cast<uint8_t>((n - 1) / 2);
+            const uint8_t hi_c = static_cast<uint8_t>(n / 2);
+            for (uint8_t d = 0; d <= lo_c; ++d) {
+                const uint8_t lo = static_cast<uint8_t>(lo_c - d);
+                const uint8_t hi = static_cast<uint8_t>(hi_c + d);
+                if (hi < n) {
+                    pi(lo);
+                    if (hi != lo) { pi(hi); }
+                }
+            }
             break;
         }
         case ArpStyle::ConvergeDiverge: {
-            std::array<uint8_t, kMaxArpNotes * 2> pattern {};
-            uint16_t p = 0;
-            uint8_t left = 0;
-            uint8_t right = n - 1;
-            while (left <= right) {
-                pattern[p++] = extended.notes[left];
-                if (left != right) { pattern[p++] = extended.notes[right]; }
-                ++left;
-                --right;
+            for (uint8_t l = 0, r = static_cast<uint8_t>(n - 1); l <= r; ++l, --r) {
+                pi(l);
+                if (l != r) { pi(r); }
             }
-            const uint16_t diverge_len = p;
-            uint16_t full_len = p;
-            if (diverge_len > 2) {
-                for (uint16_t i = 1; i + 1 < diverge_len; ++i) {
-                    pattern[full_len++] = pattern[diverge_len - 1 - i];
-                }
+            const uint16_t c_len = plen;
+            if (c_len > 2) {
+                for (uint16_t i = 1; i + 1 < c_len; ++i) { pi(pat[c_len - 1 - i]); }
             }
-            for (uint8_t i = 0; i < steps; ++i) { push(pattern[i % full_len]); }
+            break;
+        }
+        case ArpStyle::PinkyUp: {
+            const uint8_t top = static_cast<uint8_t>(n - 1);
+            for (uint8_t k = 0; k + 1 < n; ++k) { pi(top); pi(k); }
+            pi(top);
+            break;
+        }
+        case ArpStyle::PinkyUpDown: {
+            const uint8_t top = static_cast<uint8_t>(n - 1);
+            for (uint8_t k = 0; k + 1 < n; ++k) { pi(top); pi(k); }
+            for (int16_t k = static_cast<int16_t>(n) - 3; k > 0; --k) { pi(top); pi(static_cast<uint8_t>(k)); }
+            pi(top);
+            break;
+        }
+        case ArpStyle::ThumbUp: {
+            const uint8_t bottom = 0;
+            for (uint8_t k = 1; k < n; ++k) { pi(bottom); pi(k); }
+            pi(bottom);
+            break;
+        }
+        case ArpStyle::ThumbUpDown: {
+            const uint8_t bottom = 0;
+            for (uint8_t k = 1; k < n; ++k) { pi(bottom); pi(k); }
+            for (int16_t k = static_cast<int16_t>(n) - 2; k > 1; --k) { pi(bottom); pi(static_cast<uint8_t>(k)); }
+            pi(bottom);
             break;
         }
         case ArpStyle::Off:
+        case ArpStyle::ChordTrigger:
+        case ArpStyle::Random:
+        case ArpStyle::RandomOnce:
+        case ArpStyle::RandomOther:
         default:
-            for (uint8_t i = 0; i < steps; ++i) { push(extended.notes[i % n]); }
+            for (uint8_t i = 0; i < n; ++i) { pi(i); }
             break;
     }
-}
 
-void Arpeggiator::reset() {
-    count_ = 0;
-    index_ = 0;
+    if (plen == 0) {
+        out[0] = ext.notes[0];
+        out_count = 1;
+        return;
+    }
+    for (uint8_t i = 0; i < steps; ++i) { push(ext.notes[pat[i % plen]]); }
 }
 
 void Arpeggiator::rebuild(const NoteSet& input, const ArpCfg& cfg) {
     reset();
-    build_arp_sequence(input, cfg, sequence_, count_);
+    const KeyFilterCfg kf {};  // паттерн-арп не фильтруется тональностью
+    build_arp_sequence(input, cfg, kf, sequence_, count_);
 }
 
 bool Arpeggiator::active() const {

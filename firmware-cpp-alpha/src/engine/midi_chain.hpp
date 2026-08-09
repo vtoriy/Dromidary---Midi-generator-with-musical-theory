@@ -5,10 +5,12 @@
 namespace drom {
 
 // Arp note-rate divisions ("1/64".."1/1"), index into kArpNoteDivs.
+// Includes triplet subdivisions (1/3, 1/6, 1/12, 1/24, 1/48).
 constexpr const char* kArpNoteDivs[] = {
-    "1/64", "1/32", "1/16", "1/8", "1/4", "1/2", "1/1",
+    "1/64", "1/48", "1/32", "1/24", "1/16", "1/12",
+    "1/8", "1/6", "1/4", "1/3", "1/2", "1/1",
 };
-constexpr int kArpNoteDivCount = 7;
+constexpr int kArpNoteDivCount = 12;
 
 // Arp interval in ms for the current rate config (note divisions honour BPM).
 uint16_t arp_interval_ms(const ArpCfg& cfg, uint16_t bpm);

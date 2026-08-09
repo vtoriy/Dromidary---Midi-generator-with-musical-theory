@@ -34,8 +34,9 @@ private:
     uint8_t index_ {0};
 };
 
-// Builds the full arp cycle (note set after range + style) into `out`.
-// Used both by the live scheduler and by pattern processing.
-void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg, std::array<uint8_t, kMaxArpNotes>& out, uint8_t& out_count);
+// Builds the full arp cycle (keyboard-column replicas -> scale filter -> style)
+// into `out`. Used both by the live scheduler and by pattern processing.
+void build_arp_sequence(const NoteSet& base, const ArpCfg& cfg, const KeyFilterCfg& key_filter,
+                        std::array<uint8_t, kMaxArpNotes>& out, uint8_t& out_count);
 
 }  // namespace drom

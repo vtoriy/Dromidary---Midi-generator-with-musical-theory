@@ -18,8 +18,11 @@ Implemented:
   Transpose, Octave, MIDI)
 - screen modes: QUICK / DETAIL / MAIN / ANIMATION, switch via long-press
 - key filter (16 scales, snap up/down/mute), chord builder (26 chord types),
-  polyphonic arpeggiator (8 styles, note-division or ms rate, latch)
-- RandomNote mode: continuous random-note loop around a key/Play anchor
+  polyphonic arpeggiator (19 styles incl. Chord-trigger, note-division or ms
+  rate with triplets, keys×range keyboard-column expansion, scale filtering,
+  cycle length, latch)
+- RandomNote mode: continuous random-note loop around a key/Play anchor (toggle
+  off by re-pressing the same note key)
 - timing FX (swing/humanize/quantize/legato) applied to the live arpeggio,
   Gate/ADSR (attack delays Note On, release extends Note Off) and chord voicing
   Block/Strum/Roll via a delayed-event queue in `ModeEngine`

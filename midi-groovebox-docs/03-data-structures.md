@@ -66,10 +66,11 @@ struct ArpCfg {
     bool enabled {false};
     bool latch {false};
     RateMode rate_mode {RateMode::Note}; // Note (деления) / Ms (мс)
-    uint8_t rate_note_index {2};         // индекс в kArpNoteDivs => "1/8"
+    uint8_t rate_note_index {6};         // индекс в kArpNoteDivs => "1/8"
     uint16_t rate_ms {100};              // 10..2000, шаг 10
-    uint8_t range_semitones {12};        // по умолчанию одна октава
-    uint8_t num_steps {8};               // длина цикла арпеджио (1..32)
+    uint8_t range_semitones {12};        // шаг между позициями, полутоны (0..48; 12 = октава)
+    uint8_t keys {2};                    // «шагов по клавиатуре»: сколько позиций вверх (1..16)
+    uint8_t num_steps {8};               // длина цикла арпеджио в шагах (1..32)
     ArpStyle style {ArpStyle::Up};
 };
 
@@ -183,8 +184,10 @@ enum class ChordType   { Off, Major, Minor, Diminished, Augmented, Maj7, Min7, D
                          S7sh5, S7sh9, S7b9, S7sh11, Sus2, Sus4, S7sus4, Sus2_7,
                          Quartal, Quintal, Cluster, Power, kCount };
 enum class VoicingMode { Block, Strum, Roll, kCount };
-enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, AsPlayed, Random,
-                         ConvergeDiverge, kCount };
+enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, UpDownRep, DownUpRep,
+                         Converge, Diverge, ConvergeDiverge,
+                         PinkyUp, PinkyUpDown, ThumbUp, ThumbUpDown,
+                         AsPlayed, ChordTrigger, Random, RandomOnce, RandomOther, kCount };
 enum class RateMode    { Note, Ms, kCount };
 ```
 
@@ -227,10 +230,10 @@ struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_cou
 
 ## Таблицы вариантов (label → enum)
 
-- `kArpNoteDivs` (7): `"1/64","1/32","1/16","1/8","1/4","1/2","1/1"`.
+- `kArpNoteDivs` (12, включая триоли): `"1/64","1/48","1/32","1/24","1/16","1/12","1/8","1/6","1/4","1/3","1/2","1/1"`.
 - `kScaleFullLabels` (16) — соответствуют `ScaleId` в порядке enum.
 - `kCTypeFullLabels` (26) — соответствуют `ChordType` (без Off), порядок enum.
-- `kAStyleFullLabels` (8) — соответствуют `ArpStyle`.
+- `kAStyleFullLabels` (19) — соответствуют `ArpStyle` в порядке enum (см. полный список в `types.hpp`).
 - `kQuantizeLabels` (8): Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4.
 - `kShapeLabels` (4): Asc, Desc, Arch, Rnd.
 - Радиальные (8 зон): `kScaleRadialLabels` = Off,Maj,Min,Dor,Phr,Lyd,Mix,Blu;

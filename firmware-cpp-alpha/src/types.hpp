@@ -103,11 +103,22 @@ enum class ArpStyle : uint8_t {
     Off = 0,
     Up,
     Down,
-    UpDown,
-    DownUp,
-    AsPlayed,
-    Random,
-    ConvergeDiverge,
+    UpDown,          // волна вверх-вниз, крайние ноты по разу
+    DownUp,          // то же, от верхней к нижней
+    UpDownRep,       // Up & Down: волна, крайние ноты повторяются на развороте
+    DownUpRep,       // Down & Up: зеркально
+    Converge,        // с внешних нот к центру аккорда
+    Diverge,         // из центра к крайним
+    ConvergeDiverge, // Con&Diverge: оба хода в одном цикле
+    PinkyUp,         // верхняя нота = педаль, остальные восходят между её нотами
+    PinkyUpDown,     // педаль-верх + остальные волной вверх-вниз
+    ThumbUp,         // нижняя нота = остинато-бас, остальные восходят поверх
+    ThumbUpDown,     // бас-педаль + остальные волной
+    AsPlayed,        // Play Order: в порядке нажатия клавиш
+    ChordTrigger,    // аккорд целиком повторяется на каждом шаге (ритм-гейт)
+    Random,          // непрерывно случайная последовательность
+    RandomOnce,      // один случайный паттерн, закреплён на время аккорда
+    RandomOther,     // случайный порядок без повторов внутри цикла
     kCount,
 };
 
@@ -147,10 +158,11 @@ struct ArpCfg {
     bool enabled {false};
     bool latch {false};
     RateMode rate_mode {RateMode::Note};
-    uint8_t rate_note_index {2};  // index into kArpNoteDivs => "1/8"
+    uint8_t rate_note_index {6};  // index into kArpNoteDivs => "1/8"
     uint16_t rate_ms {100};       // 10..2000 step 10
-    uint8_t range_semitones {12};
-    uint8_t num_steps {8};
+    uint8_t range_semitones {12}; // шаг между позициями в полутонах (0..48; 12 = октава)
+    uint8_t keys {2};             // «шагов по клавиатуре»: сколько позиций вверх (1..16)
+    uint8_t num_steps {8};        // длина цикла арпеджио в шагах (1..32)
     ArpStyle style {ArpStyle::Up};
 };
 

@@ -104,6 +104,12 @@ void ModeEngine::refresh_show_note() {
     }
 }
 
+bool ModeEngine::take_ui_dirty() {
+    const bool v = ui_repaint_;
+    ui_repaint_ = false;
+    return v;
+}
+
 void ModeEngine::stop_arp() {
     if (current_arp_note_ != kCapNote && midi_) {
         midi_->note_off(current_arp_note_);
@@ -162,6 +168,7 @@ void ModeEngine::advance_arp(uint32_t now_ms) {
             state_->runtime.last_note = note;
             state_->runtime.show_note = true;
         }
+        ui_repaint_ = true;
     }
     last_step_ms_ = now_ms;
     next_arp_ms_ = next_arp_onset(p, now_ms, interval);
@@ -177,6 +184,7 @@ uint32_t ModeEngine::arp_fingerprint() const {
     h = fp_mix(h, p.arp.rate_note_index);
     h = fp_mix(h, p.arp.rate_ms);
     h = fp_mix(h, p.arp.range_semitones);
+    h = fp_mix(h, p.arp.keys);
     h = fp_mix(h, p.arp.num_steps);
     h = fp_mix(h, static_cast<uint32_t>(p.arp.style));
     h = fp_mix(h, p.key_filter.enabled ? 1u : 0u);
@@ -241,7 +249,7 @@ void ModeEngine::rebuild_arp(uint32_t now_ms, bool align_next_step) {
     }
 
     const Pattern& p = state_->active_pattern();
-    build_arp_sequence(merged, p.arp, arp_seq_, arp_seq_count_);
+    build_arp_sequence(merged, p.arp, p.key_filter, arp_seq_, arp_seq_count_);
     if (arp_seq_count_ == 0) {
         if (current_arp_note_ != kCapNote && midi_) {
             midi_->note_off(current_arp_note_);
@@ -275,9 +283,20 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
     // RandomNote: each pressed key raises the anchor octave of the continuous
     // random generator. The first press (or Play) starts the loop; it keeps
     // emitting random notes until RandomNote is left or Play is pressed again.
+    // Re-pressing the same key that just produced the current tone toggles the
+    // generation back off (and clears the readout).
     if (mode == PlayMode::RandomNote) {
         if (latch) {
             latched_[chip_idx] = true;
+        }
+        if (random_loop_ && state_ != nullptr &&
+            state_->runtime.last_input_note == raw_note) {
+            random_loop_stop();
+            state_->runtime.last_input_note = 0;
+            state_->runtime.last_note = 0;
+            state_->runtime.show_note = false;
+            ui_repaint_ = true;
+            return;
         }
         // Record the pressed key so the status bar can show input > generated.
         if (state_ != nullptr) {
@@ -461,6 +480,7 @@ void ModeEngine::random_loop_stop() {
     }
     last_random_note_ = 0;
     next_random_ms_ = 0;
+    ui_repaint_ = true;
 }
 
 void ModeEngine::random_loop_start(uint8_t anchor, uint32_t now_ms) {
@@ -498,6 +518,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         state_->runtime.last_note = picked;
         state_->runtime.show_note = true;
     }
+    ui_repaint_ = true;
     next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.bpm);
 }
 
