@@ -1,5 +1,8 @@
 #include "menu_items.hpp"
 
+#include <algorithm>
+#include <cstdio>
+
 #include "../engine/midi_chain.hpp"
 
 namespace drom {
@@ -78,6 +81,7 @@ const RateMode kRateModeIds[2] = {RateMode::Note, RateMode::Ms};
 const char* const kLengthLabels[4] = {"16", "32", "48", "64"};
 const char* const kQuantizeLabels[8] = {"Off", "1/32", "1/16T", "1/16", "1/8T", "1/8", "1/4T", "1/4"};
 const char* const kShapeLabels[4] = {"Asc", "Desc", "Arch", "Rnd"};
+const char* const kClockSyncLabels[3] = {"Off", "Master", "Slave"};
 
 namespace {
 
@@ -179,6 +183,21 @@ MenuItem action_item(const char* label, std::function<void()> fn) {
     return m;
 }
 
+MenuItem note_range_item(const char* label, IntGetter get_min, IntSetter set_min,
+                         IntGetter get_max, IntSetter set_max) {
+    MenuItem m;
+    m.type = MenuItemType::NoteRange;
+    m.label = label;
+    m.get_min = std::move(get_min);
+    m.set_min = std::move(set_min);
+    m.get_max = std::move(get_max);
+    m.set_max = std::move(set_max);
+    m.min_v = kNoteRangeMin;
+    m.max_v = kNoteRangeMax;
+    m.step = 1;
+    return m;
+}
+
 // ---------------------------------------------------------------------------
 // Shared per-block builders. Used BOTH by the QUICK `PRM` DETAIL submenu and
 // by the FULL menu section, so DETAIL and FULL always expose identical content.
@@ -273,6 +292,10 @@ ItemRef emit_timing_block(MenuContent& c, Pattern& p) {
     emit(c, toggle_item_io("Legato",
         [&p]() { return p.timing.legato ? 1 : 0; },
         [&p](int32_t v) { p.timing.legato = (v != 0); }));
+    emit(c, option_idx_io("Clock",
+        [&p]() { return static_cast<int32_t>(p.timing.clock); },
+        [&p](int32_t v) { p.timing.clock = static_cast<ClockSync>(v % static_cast<int>(ClockSync::kCount)); },
+        kClockSyncLabels, static_cast<int>(ClockSync::kCount)));
     return wrap_ref(c, start);
 }
 
@@ -297,6 +320,33 @@ ItemRef emit_adsr_block(MenuContent& c, Pattern& p) {
         [&p]() { return p.gate.sync_quantize ? 1 : 0; },
         [&p](int32_t v) { p.gate.sync_quantize = (v != 0); },
         kRateModeLabels, 2));
+    return wrap_ref(c, start);
+}
+
+ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
+    const std::size_t start = c.item_count;
+    emit(c, int_slider_io("Density",
+        [&p]() { return static_cast<int32_t>(p.random.density_or_probability); },
+        [&p](int32_t v) { p.random.density_or_probability = static_cast<uint8_t>(v); }, 0, 100));
+    emit(c, option_idx_io("Shape",
+        [&p]() { return static_cast<int32_t>(p.random.shape); },
+        [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v % 4); },
+        kShapeLabels, 4));
+    emit(c, note_range_item("Note Range",
+        [&p]() { return static_cast<int32_t>(p.random.note_min); },
+        [&p](int32_t v) {
+            int32_t lo = std::clamp(static_cast<int32_t>(v), kNoteRangeMin, kNoteRangeMax);
+            const int32_t hi = static_cast<int32_t>(p.random.note_max);
+            if (lo > hi) { lo = hi; }
+            p.random.note_min = static_cast<uint8_t>(lo);
+        },
+        [&p]() { return static_cast<int32_t>(p.random.note_max); },
+        [&p](int32_t v) {
+            int32_t hi = std::clamp(static_cast<int32_t>(v), kNoteRangeMin, kNoteRangeMax);
+            const int32_t lo = static_cast<int32_t>(p.random.note_min);
+            if (hi < lo) { hi = lo; }
+            p.random.note_max = static_cast<uint8_t>(hi);
+        }));
     return wrap_ref(c, start);
 }
 
@@ -525,8 +575,14 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t z) { apply_scale_zone(p.key_filter, static_cast<int>(z)); },
             kScaleRadialLabels, 8, nullptr, 0, false});
 
+        add_seg(r, Segment {SegmentType::Linear, "Snap",
+            [&p]() { return static_cast<int32_t>(p.key_filter.mode); },
+            [&p](int32_t v) { p.key_filter.mode = static_cast<SnapMode>(v % 3); },
+            kSnapLabels, 3, nullptr, 0, false});
+
         const ItemRef ref = emit_key_block(c, p);
-        add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
+        r.submenu = ref.items;
+        r.submenu_count = ref.count;
     }
 
     // ---- Chord row (midi_keyboard / random_note / midi_filter) ----
@@ -543,8 +599,14 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t z) { apply_strum_zone(p.chord, static_cast<int>(z)); },
             kStrumLabels, 8, nullptr, 0, false});
 
+        add_seg(r, Segment {SegmentType::Linear, "Voic",
+            [&p]() { return static_cast<int32_t>(p.chord.voicing); },
+            [&p](int32_t v) { p.chord.voicing = static_cast<VoicingMode>(v % 3); },
+            kVoicingLabels, 3, nullptr, 0, false});
+
         const ItemRef ref = emit_chord_block(c, p);
-        add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
+        r.submenu = ref.items;
+        r.submenu_count = ref.count;
     }
 
     // ---- Arp row (midi_keyboard / midi_filter) ----
@@ -560,11 +622,29 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t v) { p.arp.latch = (v != 0); },
             kOnOffLabels, 2, nullptr, 0, false});
 
+        // Rate as a quick cell: shows the DETAIL Rate value. In Note mode it
+        // steps through the labelled note divisions; in Free mode it shows ms.
+        auto rate_label_fn = [&p](int32_t) -> const char* {
+            static char buf[8];
+            if (p.arp.rate_mode == RateMode::Note) {
+                const int32_t i = p.arp.rate_note_index;
+                return (i >= 0 && i < kArpNoteDivCount) ? kArpNoteDivs[i] : "?";
+            }
+            snprintf(buf, sizeof(buf), "%ums", static_cast<int>(p.arp.rate_ms));
+            return buf;
+        };
+        add_seg(r, Segment {SegmentType::Linear, "Rate",
+            [&p]() { return p.arp.rate_mode == RateMode::Note ? static_cast<int32_t>(p.arp.rate_note_index) : static_cast<int32_t>(p.arp.rate_ms); },
+            [&p](int32_t v) { if (p.arp.rate_mode == RateMode::Note) { p.arp.rate_note_index = static_cast<uint8_t>(v % kArpNoteDivCount); } else { p.arp.rate_ms = static_cast<uint16_t>(v); } },
+            nullptr, 2001, nullptr, 0, false, std::move(rate_label_fn)});
+
         const ItemRef ref = emit_arp_block(c, p);
-        add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
+        r.submenu = ref.items;
+        r.submenu_count = ref.count;
     }
 
-    // ---- Timing row (affects the arp; click -> DETAIL) ----
+    // ---- Timing row (default row: swing/hum + quick BPM); click on the name
+    // opens the full Timing DETAIL (BPM/Swing/Humanize/Quantize/Legato/Clock) --
     {
         QuickRow& r = add_row("Time");
         add_seg(r, Segment {SegmentType::Radial, "Swing",
@@ -577,8 +657,14 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t z) { apply_hum_zone(p.timing, static_cast<int>(z)); },
             kHumRadialLabels, 8, nullptr, 0, false});
 
+        add_seg(r, Segment {SegmentType::Linear, "BPM",
+            [&p]() { return static_cast<int32_t>(p.timing.bpm); },
+            [&p](int32_t v) { p.timing.bpm = static_cast<uint16_t>(v); },
+            nullptr, 281, nullptr, 0, false});
+
         const ItemRef ref = emit_timing_block(c, p);
-        add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});
+        r.submenu = ref.items;
+        r.submenu_count = ref.count;
     }
 
     // ---- ADSR row (informative label, click -> DETAIL) ----
@@ -702,15 +788,9 @@ void build_full_menu(AppState* st, MenuContent& c) {
         [st](int32_t v) { st->runtime.base_octave = static_cast<uint8_t>(v); }, 1, 8));
     transp_count = static_cast<int>(c.item_count - transp_start);
 
-    // Randomize (density + shape, mirrors the QUICK random rows)
+    // Randomize (density + shape + note range, mirrors the QUICK random rows)
     rnd_start = c.item_count;
-    emit(c, int_slider_io("Density",
-        [&p]() { return static_cast<int32_t>(p.random.density_or_probability); },
-        [&p](int32_t v) { p.random.density_or_probability = static_cast<uint8_t>(v); }, 0, 100));
-    emit(c, option_idx_io("Shape",
-        [&p]() { return static_cast<int32_t>(p.random.shape); },
-        [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v % 4); },
-        kShapeLabels, 4));
+    emit_randomize_block(c, p);
     rnd_count = static_cast<int>(c.item_count - rnd_start);
 
     // MIDI (read-only placeholders)

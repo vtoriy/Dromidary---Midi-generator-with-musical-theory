@@ -1,5 +1,6 @@
 #include "renderer.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -22,19 +23,34 @@ constexpr int kColX[3] = {26, 62, 98};
 constexpr int kCellW = 32;
 constexpr int kCellPad = 2;
 
-// Status-bar "infographics": play triangle + rec dot + step progress line.
-// The mode name is drawn at x=0; the transport icons live in the gutter right
-// after it (x=36/43), so the octave/bpm/step meta must start AFTER the icons.
+// Status-bar "infographics": play triangle + rec dot + quarter-note icon + the
+// beat meter on the right. The mode name is drawn at x=0; the transport icons
+// live in the gutter right after it (x=36/43/46), so the octave/bpm/step meta
+// must start AFTER the icons.
 constexpr int kPlayIconX = 36;
 constexpr int kRecIconX = 43;
-constexpr int kStatusMetaX = 50;
+constexpr int kNoteIconX = 47;  // quarter-note icon, right of the rec dot
+constexpr int kStatusMetaX = 52;
 constexpr int kIconY = 2;
 constexpr int kIconSize = 3;
 constexpr int kProgressY = 7;  // thin blank row between status and content
+
+// Beat meter: one filled dot per playing quarter (it brightens while the step
+// sits inside that quarter), the other three hollow, anchored to the right edge.
+constexpr int kBeatCount = 4;
+constexpr int kBeatDotSize = 3;
+constexpr int kBeatGap = 2;
+constexpr int kBeatX0 =
+    DisplaySh1106::kWidth - (kBeatCount * (kBeatDotSize + kBeatGap) - kBeatGap);
+
 // QUICK screen caption line: names the columns of the focused row so it is
 // always clear which parameter each cell edits (fits inside 132px width).
 constexpr int kCaptionY = 8;
 constexpr int kCaptionRowH = 8;
+
+// DETAIL/MAIN NoteRange: a thin band under the mini-range tracks the active
+// min..max over the full 132px strip (left = note 12 / C0, right = 119 / B8).
+constexpr int kRangeBarY = 7;  // one pixel above the next row
 
 void draw_play_icon(DisplaySh1106& d) {
     // Right-pointing triangle.
@@ -45,6 +61,27 @@ void draw_play_icon(DisplaySh1106& d) {
 void draw_rec_icon(DisplaySh1106& d) {
     // Filled dot.
     d.fill_rect(kRecIconX, kIconY, kIconSize, kIconSize, true);
+}
+
+void draw_note_icon(DisplaySh1106& d) {
+    // Quarter-note: vertical stem, flag, filled head.
+    d.fill_rect(kNoteIconX, kIconY + 1, 1, 4, true);              // stem
+    d.fill_rect(kNoteIconX + 1, kIconY + 1, 1, 1, true);          // flag
+    d.fill_rect(kNoteIconX - 1, kIconY + 1, 2, 2, true);          // head
+}
+
+void draw_beat_meter(DisplaySh1106& d, int beat) {
+    for (int b = 0; b < kBeatCount; ++b) {
+        const int x = kBeatX0 + b * (kBeatDotSize + kBeatGap);
+        const bool on = (b == beat);
+        if (on) {
+            d.fill_rect(x, kIconY, kBeatDotSize, kBeatDotSize, true);
+        } else {
+            // Hollow square: outer 3x3 lit, centre cleared.
+            d.fill_rect(x, kIconY, kBeatDotSize, kBeatDotSize, true);
+            d.fill_rect(x + 1, kIconY + 1, kBeatDotSize - 2, kBeatDotSize - 2, false);
+        }
+    }
 }
 
 const char* screen_prefix(ScreenMode m) {
@@ -58,6 +95,13 @@ const char* screen_prefix(ScreenMode m) {
 
 void seg_value_text(const Segment& s, char* out, int cap) {
     const int v = static_cast<int>(s.get());
+    if (s.label_fn) {
+        const char* txt = s.label_fn(v);
+        if (txt != nullptr) {
+            snprintf(out, cap, "%s", txt);
+            return;
+        }
+    }
     if (s.labels != nullptr && v >= 0 && v < s.count) {
         snprintf(out, cap, "%s", s.labels[v]);
     } else {
@@ -124,6 +168,14 @@ void item_value_text(const MenuItem& it, char* out, int cap) {
             }
             break;
         }
+        case MenuItemType::NoteRange:
+            // "C3..B6": min on the left, max on the right, `#` strip between.
+            snprintf(out, cap, "%s%d..%s%d",
+                     midi_note_glyph(static_cast<uint8_t>(it.get_min())),
+                     midi_note_octave(static_cast<uint8_t>(it.get_min())),
+                     midi_note_glyph(static_cast<uint8_t>(it.get_max())),
+                     midi_note_octave(static_cast<uint8_t>(it.get_max())));
+            break;
         default:
             out[0] = '\0';
             break;
@@ -148,6 +200,33 @@ void draw_quick_cell(DisplaySh1106& d, int col, int y, const char* text, bool in
         const char mark = '*';
         d.draw_text_px(&mark, x + kCellW - DisplaySh1106::kTextAdvance, y, on);
     }
+}
+
+// NoteRange overview strip: a 1..2 px band under the row spanning the active
+// min..max across the display. Focused rows get a heavier underline.
+void draw_range_band(DisplaySh1106& d, const MenuItem& it, int y, bool focused) {
+    if (!it.get_min || !it.get_max) {
+        return;
+    }
+    const int32_t lo = it.get_min();
+    const int32_t hi = it.get_max();
+    const int32_t span = (kNoteRangeMax - kNoteRangeMin);
+    int x = (span <= 0) ? 0
+                        : (static_cast<int>(lo) - kNoteRangeMin) * DisplaySh1106::kWidth / span;
+    int w = (span <= 0) ? DisplaySh1106::kWidth
+                        : (static_cast<int>(hi) - kNoteRangeMin) * DisplaySh1106::kWidth / span - x;
+    if (w < 1) {
+        w = 1;
+    }
+    // Clip right edge.
+    if (x + w > DisplaySh1106::kWidth) {
+        w = DisplaySh1106::kWidth - x;
+    }
+    if (w <= 0) {
+        return;
+    }
+    const int band_y = y + kRangeBarY;
+    d.fill_rect(x, band_y, w, focused ? 2 : 1, true);
 }
 
 }  // namespace
@@ -199,19 +278,19 @@ void draw_test_screen(const AppState& state, DisplaySh1106& d) {
 void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     display_->clear();
 
-    // Left segment: mode name (ends ~30 px, before the play/rec icons at x=36).
+    // Left segment: mode name (ends ~30 px, before the icons at x=36).
     display_->draw_text(screen_prefix(state.runtime.screen_mode), 0, kStatusY);
 
-    // Middle segment: octave/bpm/step, starts right of the transport icons.
+    // Middle segment: octave/bpm/step, starts right of the icon gutter.
     char meta[kMaxCols + 1];
     if (state.runtime.mode == PlayMode::RandomNote) {
         // RandomNote is not a pattern; drop the step readout to leave room for
         // the two-note readout on the right (pressed key > generated note).
-        snprintf(meta, sizeof(meta), "o%d %d",
+        snprintf(meta, sizeof(meta), "O%d %d",
                  static_cast<int>(state.runtime.base_octave),
                  static_cast<int>(state.active_pattern().timing.bpm));
     } else {
-        snprintf(meta, sizeof(meta), "o%d %d s%d",
+        snprintf(meta, sizeof(meta), "O%d %d S%d",
                  static_cast<int>(state.runtime.base_octave),
                  static_cast<int>(state.active_pattern().timing.bpm),
                  static_cast<int>(state.runtime.current_step));
@@ -220,13 +299,25 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
 
     char status[kMaxCols + 1];
 
-    // Icon row: play triangle / rec dot (cheap fill_rect, no font glyphs).
+    // Icon gutter: play triangle / rec dot / quarter-note (cheap fill_rect, no
+    // font glyphs).
     if (state.runtime.playing) {
         draw_play_icon(*display_);
     }
     if (state.runtime.recording) {
         draw_rec_icon(*display_);
     }
+    draw_note_icon(*display_);
+
+    // Pattern beat meter: filled dot = current quarter, others hollow.
+    if (state.runtime.playing && state.active_pattern().length > 0) {
+        const int beat = static_cast<int>(state.runtime.current_step) * kBeatCount /
+                         static_cast<int>(state.active_pattern().length);
+        draw_beat_meter(*display_, std::min(beat, kBeatCount - 1));
+    } else {
+        draw_beat_meter(*display_, -1);
+    }
+
     // Playback progress line in the thin row under the status bar.
     if (state.runtime.playing && state.active_pattern().length > 0) {
         const int w = DisplaySh1106::kWidth *
@@ -329,7 +420,13 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
             const int n = len > label_max ? label_max : len;
             std::memcpy(label, row.label, static_cast<std::size_t>(n));
             label[n] = '\0';
-            display_->draw_text(label, 0, y);
+            if (focused && f.seg == -1) {
+                // Row-caption focus (the leftmost column): invert the label.
+                display_->fill_rect(0, y - 1, kLabelW, kRowH, true);
+                display_->draw_text_px(label, 0, y, false);
+            } else {
+                display_->draw_text(label, 0, y);
+            }
         }
         return;
     }
@@ -371,8 +468,19 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
             if (pos < kMaxCols) {
                 line[pos++] = ':';
             }
-            for (const char* p = value; *p && pos < kMaxCols; ++p) {
-                line[pos++] = *p;
+            if (it.type == MenuItemType::NoteRange && engine.editing_range() && focused) {
+                // Range editor active: bracket the span.
+                line[pos++] = '[';
+                for (const char* p = value; *p && pos < kMaxCols; ++p) {
+                    line[pos++] = *p;
+                }
+                if (pos < kMaxCols) {
+                    line[pos++] = ']';
+                }
+            } else {
+                for (const char* p = value; *p && pos < kMaxCols; ++p) {
+                    line[pos++] = *p;
+                }
             }
             if (changed && pos < kMaxCols) {
                 line[pos++] = '+';
@@ -380,7 +488,11 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
             }
         }
         line[pos] = '\0';
-        display_->draw_text(line, 0, kContentY + line_i * kRowH);
+        const int row_y = kContentY + line_i * kRowH;
+        display_->draw_text(line, 0, row_y);
+        if (it.type == MenuItemType::NoteRange) {
+            draw_range_band(*display_, it, row_y, focused);
+        }
     }
 }
 

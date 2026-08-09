@@ -222,7 +222,25 @@ Note On отменяются, звук не выдаётся; отпускани
 > каждой новой случайной ноте даже без нажатий: `ModeEngine::take_ui_dirty()`
 > выставляет флаг repaint, который опрашивает главный цикл после `tick()`.
 
-## Итоговый порядок применения (сводка)
+## MIDI Clock (Timing → Clock: Off / Master / Slave)
+
+Тактовая синхронизация реализована в `app_loop.cpp::update_midi_clock()`. Не входит
+в нотный конвейер, но влияет на транспорт/темп активного паттерна.
+
+- **Off** — ничего не отправляется и не принимается.
+- **Master** — устройство задаёт темп (`TimingCfg.bpm`). При старте Play шлёт
+  `0xFA Start`, далее непрерывно `0xF8 Clock` каждые `60000/(bpm×24)` мс
+  (24 PPQN — как у DIN sync), при остановке Play — `0xFC Stop`.
+- **Slave** — USB MIDI IN слушается (`UsbMidi::poll_realtime()` через
+  `tud_midi_packet_read`). `0xFA/0xFB` → `playing=true`, `0xFC` → `playing=false`
+  + All Notes Off. Интервал между двумя `0xF8` усредняется (`clock_avg_interval_`)
+  и превращается в `bpm = 60000 / (interval × 24)` (clamp 20..300), записывается
+  в `TimingCfg.bpm`.
+
+Реализация: `UsbMidi::realtime(status)` отправляет single-byte realtime-пакет
+(`CIN 0x0F`). Перехват Start/Stop/Clock у Master и Slave — в `update_midi_clock()`.
+
+## Сводка
 
 1. Транспонирование (полутоны/октавы) — до Key Filter
 2. Key Filter (16 ладов, snap up/down/mute)

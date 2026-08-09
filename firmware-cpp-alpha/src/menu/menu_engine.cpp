@@ -16,6 +16,7 @@ void MenuEngine::rebuild() {
     edit_mode_ = false;
     edit_snapshot_ = 0;
     item_snapshot_ = 0;
+    range_edit_ = false;
 
     switch (st_->runtime.screen_mode) {
         case ScreenMode::Quick:
@@ -65,6 +66,7 @@ void MenuEngine::pop() {
         --depth_;
     }
     edit_mode_ = false;
+    range_edit_ = false;
     if (depth_ > 0 && !stack_[depth_ - 1].is_rows) {
         snapshot_focused_item();
     }
@@ -175,7 +177,9 @@ void MenuEngine::move_row(int delta) {
     }
     f.cursor = new_cur;
     const int target_segs = f.rows[new_cur].seg_count;
-    f.seg = (target_segs > 0) ? std::clamp(old_seg, 0, target_segs - 1) : 0;
+    // -1 = the row label (leftmost column), the only place where click opens
+    // the row's DETAIL submenu.
+    f.seg = (target_segs > 0) ? std::clamp(old_seg, -1, target_segs - 1) : -1;
     snapshot_cell();
 }
 
@@ -184,13 +188,14 @@ void MenuEngine::move_seg(int delta) {
         return;
     }
     const Segment* seg = current_segment();
-    if (seg == nullptr) {
-        return;
-    }
     MenuFrame& f = stack_[depth_ - 1];
     const QuickRow& row = f.rows[f.cursor];
-    f.seg = std::clamp(f.seg + delta, 0, row.seg_count - 1);
-    snapshot_cell();
+    // -1 is the row caption column; moving left from cell 0 lands on it when
+    // the row carries a DETAIL submenu (seg = nullptr triggers the push).
+    f.seg = std::clamp(f.seg + delta, -1, row.seg_count - 1);
+    if (seg != nullptr || f.seg == -1) {
+        snapshot_cell();
+    }
 }
 
 void MenuEngine::move_cursor(int delta) {
@@ -215,8 +220,31 @@ void MenuEngine::move_cursor(int delta) {
 
 void MenuEngine::snapshot_focused_item() {
     const MenuItem* item = current_item();
-    if (item != nullptr && item->get_i) {
+    if (item == nullptr) {
+        return;
+    }
+    if (item->type == MenuItemType::NoteRange) {
+        if (item->get_min && item->get_max) {
+            item_snapshot_ = item->get_min();
+            cell_accepted_ = item->get_max();
+        }
+        return;
+    }
+    if (item->get_i) {
         item_snapshot_ = item->get_i();
+    }
+}
+
+void MenuEngine::snapshot_range() {
+    const MenuItem* item = current_item();
+    if (item == nullptr) {
+        return;
+    }
+    if (item->get_min) {
+        range_snap_min_ = item->get_min();
+    }
+    if (item->get_max) {
+        range_snap_max_ = item->get_max();
     }
 }
 
@@ -283,6 +311,17 @@ void MenuEngine::press_short() {
     if (item == nullptr) {
         return;
     }
+    if (item->type == MenuItemType::NoteRange) {
+        // Click toggles the 2D range editor. A click while editing confirms
+        // the live min/max and leaves the active state.
+        if (range_edit_) {
+            range_edit_ = false;
+        } else {
+            snapshot_range();
+            range_edit_ = true;
+        }
+        return;
+    }
     if (item->type == MenuItemType::Section || item->type == MenuItemType::Group) {
         if (item->child_count > 0) {
             push_items(item->children, item->child_count);
@@ -323,7 +362,18 @@ void MenuEngine::reset_value() {
         return;
     }
     const MenuItem* item = current_item();
-    if (item != nullptr && item->set_i) {
+    if (item == nullptr) {
+        return;
+    }
+    if (item->type == MenuItemType::NoteRange) {
+        // Rest + click (or double-click) restores the whole min..max span to
+        // the last accepted range and leaves the 2D editor.
+        if (item->set_min) { item->set_min(range_snap_min_); }
+        if (item->set_max) { item->set_max(range_snap_max_); }
+        range_edit_ = false;
+        return;
+    }
+    if (item->set_i) {
         item->set_i(item_snapshot_);
     }
 }
@@ -433,6 +483,26 @@ void MenuEngine::tilt(Direction dir, bool shift) {
 
     const MenuItem* item = current_item();
     if (item == nullptr) {
+        return;
+    }
+    // Active 2D range editing: up/down widens/narrows the span, left/right
+    // shifts the centre. The cursor does not move while a range is edited.
+    if (range_edit_ && item->type == MenuItemType::NoteRange && item->set_min && item->set_max) {
+        int32_t lo = item->get_min ? item->get_min() : 0;
+        int32_t hi = item->get_max ? item->get_max() : 0;
+        if (dir == Direction::Up) {
+            lo = std::max(static_cast<int32_t>(kNoteRangeMin), lo - 1);
+            hi = std::min(static_cast<int32_t>(kNoteRangeMax), hi + 1);
+        } else if (dir == Direction::Down) {
+            lo = std::min(hi, lo + 1);
+            hi = std::max(lo, hi - 1);
+        } else if (dir == Direction::Right) {
+            if (hi < kNoteRangeMax) { ++lo; ++hi; }
+        } else if (dir == Direction::Left) {
+            if (lo > kNoteRangeMin) { --lo; --hi; }
+        }
+        item->set_min(lo);
+        item->set_max(hi);
         return;
     }
     if (item->type == MenuItemType::Section || item->type == MenuItemType::Group) {

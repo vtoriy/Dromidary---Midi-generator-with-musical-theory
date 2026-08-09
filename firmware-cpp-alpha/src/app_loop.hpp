@@ -20,6 +20,7 @@ private:
     void process_functional(uint32_t raw, uint32_t now_ms);
     void process_notes(uint32_t raw, uint32_t now_ms);
     void process_joystick(uint32_t raw, uint32_t now_ms);
+    void update_midi_clock(uint32_t now_ms);
     bool is_pressed(uint32_t raw, uint8_t bit) const;
     uint8_t button_to_note(uint8_t index) const;
 
@@ -70,6 +71,17 @@ private:
     uint32_t last_flush_ms_ {0};
     uint32_t last_anim_ms_ {0};
     bool ui_dirty_ {true};
+
+    // MIDI Clock sync state.
+    // Master: 24 ppqn ticker against runtime.playing.
+    uint32_t clock_tick_ms_ {0};      // wall-clock anchor for the next master tick
+    bool master_started_ {false};     // start/continue already sent for this run
+    // Slave: received-tick rate estimator. The interval between two F8s is
+    // averaged into clock_avg_interval_ and converted to BPM for the pattern.
+    uint32_t clock_last_rx_ms_ {0};
+    uint32_t clock_sample_interval_ {0};  // last F8..F8 gap (ms)
+    uint32_t clock_avg_interval_ {0};     // smoothed gap (ms); 0 = no sample yet
+    bool slave_running_ {false};          // 0xFA/0xFB seen, waiting for F8 stream
 };
 
 }  // namespace drom

@@ -19,6 +19,9 @@ constexpr uint32_t kFlushMs = 40;
 constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
 constexpr uint32_t kPersistSaveDelayMs = 500; // wait 0.5s of no edits before flashing
 
+// MIDI Clock: 24 pulses per quarter note (as with a DIN sync box).
+constexpr int kClockPpqn = 24;
+
 // Functional buttons are on chip3, whose 8 bits are the HIGH byte of the
 // 24-bit shift read (raw bits 16..23). These constants are RAW bit indices —
 // the same convention the note keys use (raw bits 0..15) — so the whole input
@@ -373,6 +376,90 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
     }
 }
 
+void AppLoop::update_midi_clock(uint32_t now_ms) {
+    const TimingCfg& t = state_.active_pattern().timing;
+    const ClockSync mode = t.clock;
+
+    // Master: emit 24ppqn Start/Stop + ticks whenever the pattern is running.
+    if (mode == ClockSync::Master) {
+        if (state_.runtime.playing) {
+            if (!master_started_) {
+                midi_.realtime(0xFA);  // Start
+                master_started_ = true;
+            }
+            const int bpm = static_cast<int>(t.bpm);
+            if (bpm > 0) {
+                // One quarter note lasts 60000/bpm ms; a tick is 1/24 of it.
+                const uint32_t tick_ms = static_cast<uint32_t>(60000 / bpm / kClockPpqn);
+                if (clock_tick_ms_ == 0 || now_ms - clock_tick_ms_ >= tick_ms) {
+                    midi_.realtime(0xF8);
+                    clock_tick_ms_ = now_ms;
+                }
+            }
+        } else {
+            if (master_started_) {
+                midi_.realtime(0xFC);  // Stop
+                master_started_ = false;
+                clock_tick_ms_ = 0;
+            } else {
+                clock_tick_ms_ = 0;
+            }
+        }
+        return;
+    }
+
+    // Slave: derive the tempo from the incoming F8 stream and mirror the host
+    // transport (Start/Continue -> running, Stop -> stopped).
+    if (mode == ClockSync::Slave) {
+        uint8_t rt = midi_.poll_realtime();
+        bool saw_tick = false;
+        while (rt != 0) {
+            switch (rt) {
+                case 0xFA:  // Start
+                case 0xFB:  // Continue
+                    slave_running_ = true;
+                    state_.runtime.playing = true;
+                    ui_dirty_ = true;
+                    break;
+                case 0xFC:  // Stop
+                    slave_running_ = false;
+                    state_.runtime.playing = false;
+                    mode_.all_notes_off();
+                    ui_dirty_ = true;
+                    break;
+                case 0xF8:  // Clock tick
+                    saw_tick = true;
+                    break;
+                default:
+                    break;
+            }
+            rt = midi_.poll_realtime();
+        }
+        if (saw_tick) {
+            if (clock_last_rx_ms_ != 0 && now_ms > clock_last_rx_ms_) {
+                clock_sample_interval_ = now_ms - clock_last_rx_ms_;
+                if (clock_avg_interval_ == 0) {
+                    clock_avg_interval_ = clock_sample_interval_;
+                } else {
+                    clock_avg_interval_ = (clock_avg_interval_ + clock_sample_interval_) / 2;
+                }
+                // 24 ticks per quarter => bpm = 60000 / (interval * 24).
+                const uint32_t interval = clock_avg_interval_ > 0 ? clock_avg_interval_ : 1;
+                const int32_t avg_bpm = static_cast<int32_t>(60000 / (interval * kClockPpqn));
+                if (avg_bpm >= 20 && avg_bpm <= 300) {
+                    state_.active_pattern().timing.bpm = static_cast<uint16_t>(avg_bpm);
+                    ui_dirty_ = true;
+                }
+            }
+            clock_last_rx_ms_ = now_ms;
+        }
+        // A dead clock line with nothing arriving each loop resets nothing —
+        // the host and device share one USB bus, so silence means the master
+        // stopped sending; Stop usually arrives first in that case.
+        return;
+    }
+}
+
 [[noreturn]] void AppLoop::run() {
     while (true) {
         tud_task();
@@ -383,6 +470,7 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
         process_functional(raw, now_ms);
         process_notes(raw, now_ms);
         process_joystick(raw, now_ms);
+        update_midi_clock(now_ms);
 
         // Raw note-key image for the test screen: bit i = key i pressed.
         state_.runtime.note_bits = static_cast<uint16_t>(~raw & 0xFFFFu);

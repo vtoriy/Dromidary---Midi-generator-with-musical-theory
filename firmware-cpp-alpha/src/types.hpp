@@ -17,6 +17,10 @@ constexpr std::size_t kMaxArpNotes = 64;
 constexpr std::size_t kMaxHeldKeys = 16;
 constexpr std::size_t kKeyCount = 16;
 
+// Editable note range for RandomNote (MIDI note numbers): C0..B8.
+constexpr int32_t kNoteRangeMin = 12;
+constexpr int32_t kNoteRangeMax = 119;
+
 // ---------------------------------------------------------------------------
 // Enumerations (mirror the Python key_filter/chord_builder/arpeggiator lists)
 // ---------------------------------------------------------------------------
@@ -128,6 +132,13 @@ enum class RateMode : uint8_t {
     kCount,
 };
 
+enum class ClockSync : uint8_t {
+    Off = 0,
+    Master,
+    Slave,
+    kCount,
+};
+
 // ---------------------------------------------------------------------------
 // Pattern configuration structs
 // ---------------------------------------------------------------------------
@@ -172,6 +183,7 @@ struct TimingCfg {
     uint8_t humanize_ms {0};      // 0..50
     uint8_t quantize_grid {0};    // index into kQuantizeGrids
     bool legato {false};
+    ClockSync clock {ClockSync::Off};  // MIDI Clock: Off/Master/Slave
 };
 
 struct GateCfg {
@@ -191,6 +203,8 @@ struct TransposeCfg {
 struct RandomCfg {
     uint8_t density_or_probability {50};  // 0..100
     uint8_t shape {0};                    // index into kShapeOptions
+    uint8_t note_min {24};                // lower bound of the random note range (MIDI, C1 default)
+    uint8_t note_max {108};               // upper bound of the random note range (MIDI, C8 default)
 };
 
 // Persistent input-click timing settings (survive device reboot).
@@ -245,6 +259,7 @@ enum class MenuItemType : uint8_t {
     Option,        // index into option_labels / dynamic label fn
     IntSlider,     // int range min..max
     Rate,          // arp rate: note divisions (mode==Note) or ms int (mode==Ms)
+    NoteRange,     // min..max MIDI notes, 2D joystick editing (DETAIL/FULL)
     Action,        // runs a callback on click
 };
 
@@ -268,6 +283,13 @@ struct MenuItem {
     std::function<const char*(int32_t)> label_fn;
     std::function<int32_t()> unit_get;   // Rate: 0 = Note divisions, 1 = ms
     std::function<void()> action;        // Action items: run on click
+
+    // NoteRange: two independent bounds with live get/set. min_v/max_v hold
+    // the editable MIDI-note span (e.g. 12..119 = C0..B8).
+    IntGetter get_min;
+    IntSetter set_min;
+    IntGetter get_max;
+    IntSetter set_max;
 };
 
 // ---------------------------------------------------------------------------
@@ -291,6 +313,7 @@ struct Segment {
     const MenuItem* children {nullptr};
     int child_count {0};
     bool direct {false};   // left/right edits immediately (no click-first)
+    std::function<const char*(int32_t)> label_fn;  // dynamic cell label (overrides labels)
 };
 
 constexpr int kMaxSegsPerRow = 3;

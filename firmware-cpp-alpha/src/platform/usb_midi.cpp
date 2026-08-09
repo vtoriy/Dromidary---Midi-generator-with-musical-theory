@@ -27,4 +27,23 @@ void UsbMidi::cc(uint8_t channel, uint8_t control, uint8_t value) const {
     tud_midi_stream_write(0, packet, sizeof(packet));
 }
 
+void UsbMidi::realtime(uint8_t status) const {
+    // System real-time message: one data byte, CIN 0x0F.
+    const uint8_t packet[4] = {0x0F, status, 0x00, 0x00};
+    tud_midi_stream_write(0, packet, sizeof(packet));
+}
+
+uint8_t UsbMidi::poll_realtime() const {
+    uint8_t packet[4];
+    while (tud_midi_packet_read(packet)) {
+        // Stream packets are [CIN, status, d1, d2]. Real-time system messages
+        // are single-status-byte packets with CIN 0xF.
+        const uint8_t status = packet[1];
+        if (status >= 0xF8) {
+            return status;
+        }
+    }
+    return 0;
+}
+
 }  // namespace drom

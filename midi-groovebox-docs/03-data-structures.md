@@ -75,6 +75,7 @@ struct ArpCfg {
 
 struct TimingCfg {
     uint16_t bpm {120};          // темп, 20..300
+    ClockSync clock {ClockSync::Off}; // MIDI Clock: Off / Master / Slave
     uint8_t swing_pct {0};       // задержка "off-beat" шага арпа (0..100)
     uint8_t humanize_ms {0};     // псевдослучайный сдвиг шага арпа (0..50)
     uint8_t quantize_grid {0};   // индекс в kQuantizeGrids (0 = Off)
@@ -103,12 +104,16 @@ struct TransposeCfg {
 struct RandomCfg {
     uint8_t density_or_probability {50}; // 0..100
     uint8_t shape {0};                   // индекс в kShapeOptions (Asc/Desc/Arch/Rnd)
+    uint8_t note_min {24};               // Note Range: нижняя граница (MIDI note)
+    uint8_t note_max {108};              // Note Range: верхняя граница
 };
 ```
 
 > `density_or_probability` в alpha используется как вероятность появления ноты в
 > потоке RandomNote (в UI — ячейка Dens); полноценная генерация случайных паттернов
 > с диапазоном/длиной/velocity отложена (см. `07-roadmap-open-questions.md`).
+> Диапазон нот (`note_min/note_max`) редактируется через `NoteRange`-пункт
+> (`Randomize → Note Range`), границы 12..119 (C0..B8) — `kNoteRangeMin/Max`.
 
 ## Slot (слот хранения)
 
@@ -189,6 +194,7 @@ enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, UpDownRep, DownUpRep,
                          PinkyUp, PinkyUpDown, ThumbUp, ThumbUpDown,
                          AsPlayed, ChordTrigger, Random, RandomOnce, RandomOther, kCount };
 enum class RateMode    { Note, Ms, kCount };
+enum class ClockSync   { Off, Master, Slave, kCount };  // Timing → Clock
 ```
 
 ## MenuItem / Segment (модель меню)
@@ -197,7 +203,7 @@ enum class RateMode    { Note, Ms, kCount };
 редактируются live через getter/setter (`std::function`).
 
 ```cpp
-enum class MenuItemType { Section, Group, Toggle, Option, IntSlider, Rate, Action };
+enum class MenuItemType { Section, Group, Toggle, Option, IntSlider, Rate, NoteRange, Action };
 struct MenuItem {
     MenuItemType type;
     const char* label;
@@ -208,6 +214,9 @@ struct MenuItem {
     std::function<const char*(int32_t)> label_fn;  // динамическая подпись
     std::function<int32_t()> unit_get;             // Rate: 0=Note, 1=Ms
     std::function<void()> action;                  // Action-пункты
+    // NoteRange: независимые границы (min/max). min_v..max_v = пределы 12..119.
+    IntGetter get_min; IntSetter set_min;
+    IntGetter get_max; IntSetter set_max;
 };
 ```
 
@@ -222,11 +231,17 @@ struct Segment {
     const char* const* labels; int count;
     const MenuItem* children; int child_count;   // для Param → DETAIL
     bool direct;                                 // правка сразу без клика
+    std::function<const char*(int32_t)> label_fn;  // динамическая подпись ячейки
 };
 struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_count;
                   const MenuItem* submenu; int submenu_count;
                   std::function<const char*()> summary_fn; };
 ```
+
+Quick-ячейка `seg` может принимать значение **−1** = фокус на имени строки
+(`menu_engine.cpp`): наклон влево с ячейки 0, `current_segment()` вернёт nullptr,
+клик откроет DETAIL (`row.submenu`). В строке QUICK хранится её подменю
+(`submenu/submenu_count`, заполняется из `emit_*_block`).
 
 ## Таблицы вариантов (label → enum)
 
@@ -236,6 +251,7 @@ struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_cou
 - `kAStyleFullLabels` (19) — соответствуют `ArpStyle` в порядке enum (см. полный список в `types.hpp`).
 - `kQuantizeLabels` (8): Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4.
 - `kShapeLabels` (4): Asc, Desc, Arch, Rnd.
+- `kClockSyncLabels` (3): Off, Master, Slave.
 - Радиальные (8 зон): `kScaleRadialLabels` = Off,Maj,Min,Dor,Phr,Lyd,Mix,Blu;
   `kCTypeRadialLabels` = Off,Maj,Min,Maj7,Min7,7,Sus4,Pow;
   `kAStyleRadialLabels` = Off,Up,Down,UpDn,DnUp,Play,Rnd,CvDv;
