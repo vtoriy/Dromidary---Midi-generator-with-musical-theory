@@ -24,6 +24,10 @@ public:
 
     void on_arp_config_changed(uint32_t now_ms);
 
+    // True while any note is still sounding (held/latched/arp/random loop);
+    // used by the Play transport to decide whether a press should silence it.
+    bool any_active_input() const;
+
     // Continuous RandomNote mode: started by Play or by a first key press and
     // kept running until RandomNote is left or Play is pressed again. A fresh
     // random note (round a fixed anchor, filtered into the current scale) is
@@ -52,8 +56,6 @@ private:
     void release_chip(uint8_t chip_idx, uint32_t now_ms);
     void check_config(uint32_t now_ms);
     uint8_t pick_random_note(uint8_t anchor);
-    // True while any note is still sounding (held/latched/arp/random loop).
-    bool any_active_input() const;
     // Sync runtime.show_note with any_active_input(); call after note_off etc.
     void refresh_show_note();
 

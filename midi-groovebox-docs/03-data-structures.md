@@ -239,4 +239,4 @@ struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_cou
 - Радиальные (8 зон): `kScaleRadialLabels` = Off,Maj,Min,Dor,Phr,Lyd,Mix,Blu;
   `kCTypeRadialLabels` = Off,Maj,Min,Maj7,Min7,7,Sus4,Pow;
   `kAStyleRadialLabels` = Off,Up,Down,UpDn,DnUp,Play,Rnd,CvDv;
-  `kStrumLabels` = Off,5,10,15,20,25,30,35 (мс).
+  `kStrumLabels` = Off,10,20,30,40,50,75,100 (мс).

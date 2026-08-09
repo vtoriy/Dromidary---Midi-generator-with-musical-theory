@@ -6,7 +6,7 @@
 namespace drom {
 
 constexpr std::size_t kMaxMenuItems = 96;
-constexpr int kMaxQuickRows = 6;
+constexpr int kMaxQuickRows = 8;
 
 // Storage pool: the menubuilders emit items/rows into these fixed arrays during
 // each rebuild. Pointers into `items` stay stable because it is a std::array.

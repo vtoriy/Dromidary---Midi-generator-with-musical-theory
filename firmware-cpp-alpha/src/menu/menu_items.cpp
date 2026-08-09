@@ -13,8 +13,8 @@ const char* const kNoteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "
 const char* const kScaleRadialLabels[8] = {"Off", "Maj", "Min", "Dor", "Phr", "Lyd", "Mix", "Blu"};
 const char* const kCTypeRadialLabels[8] = {"Off", "Maj", "Min", "Maj7", "Min7", "7", "Sus4", "Pow"};
 const char* const kAStyleRadialLabels[8] = {"Off", "Up", "Down", "UpDn", "DnUp", "Play", "Rnd", "CvDv"};
-const char* const kStrumLabels[8] = {"Off", "5", "10", "15", "20", "25", "30", "35"};
-constexpr int kStrumZones[8] = {0, 5, 10, 15, 20, 25, 30, 35};
+const char* const kStrumLabels[8] = {"Off", "10", "20", "30", "40", "50", "75", "100"};
+constexpr int kStrumZones[8] = {0, 10, 20, 30, 40, 50, 75, 100};
 const char* const kSwingRadialLabels[8] = {"Off", "12", "25", "33", "42", "50", "62", "75"};
 constexpr int kSwingZones[8] = {0, 12, 25, 33, 42, 50, 62, 75};
 const char* const kHumRadialLabels[8] = {"0", "5", "10", "15", "20", "25", "30", "40"};
@@ -219,7 +219,7 @@ ItemRef emit_chord_block(MenuContent& c, Pattern& p) {
         kVoicingLabels, 3));
     emit(c, int_slider_io("Strum",
         [&p]() { return static_cast<int32_t>(p.chord.strum_delay_ms); },
-        [&p](int32_t v) { p.chord.strum_delay_ms = static_cast<uint8_t>(v); }, 1, 100));
+        [&p](int32_t v) { p.chord.strum_delay_ms = static_cast<uint8_t>(v); }, 1, 150));
     return wrap_ref(c, start);
 }
 
@@ -402,8 +402,10 @@ void apply_astyle_zone(ArpCfg& ac, int zone) {
 }
 
 int strum_zone(const ChordCfg& cc) {
-    const int v = cc.strum_delay_ms / 5;
-    return v < 0 ? 0 : (v > 7 ? 7 : v);
+    for (int i = 7; i >= 0; --i) {
+        if (static_cast<int>(cc.strum_delay_ms) >= kStrumZones[i]) { return i; }
+    }
+    return 0;
 }
 
 void apply_strum_zone(ChordCfg& cc, int zone) {
@@ -486,6 +488,9 @@ void build_quick_rows(AppState* st, MenuContent& c) {
     Pattern& p = st->active_pattern();
 
     auto add_row = [&](const char* label) -> QuickRow& {
+        if (c.row_count >= kMaxQuickRows) {
+            return c.rows[c.row_count - 1];
+        }
         QuickRow& r = c.rows[c.row_count++];
         r = QuickRow {};
         r.label = label;
@@ -528,7 +533,7 @@ void build_quick_rows(AppState* st, MenuContent& c) {
     const PlayMode mode = st->runtime.mode;
     if (mode == PlayMode::MidiKeyboard || mode == PlayMode::RandomNote || mode == PlayMode::MidiFilter) {
         QuickRow& r = add_row("CHD");
-        add_seg(r, Segment {SegmentType::Radial, "CType",
+        add_seg(r, Segment {SegmentType::Radial, "Type",
             [&p]() { return static_cast<int32_t>(ctype_zone(p.chord)); },
             [&p](int32_t z) { apply_ctype_zone(p.chord, static_cast<int>(z)); },
             kCTypeRadialLabels, 8, nullptr, 0, false});
@@ -545,7 +550,7 @@ void build_quick_rows(AppState* st, MenuContent& c) {
     // ---- Arp row (midi_keyboard / midi_filter) ----
     if (mode == PlayMode::MidiKeyboard || mode == PlayMode::MidiFilter) {
         QuickRow& r = add_row("Arp");
-        add_seg(r, Segment {SegmentType::Radial, "AStyle",
+        add_seg(r, Segment {SegmentType::Radial, "Style",
             [&p]() { return static_cast<int32_t>(astyle_zone(p.arp)); },
             [&p](int32_t z) { apply_astyle_zone(p.arp, static_cast<int>(z)); },
             kAStyleRadialLabels, 8, nullptr, 0, false});
@@ -567,10 +572,10 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t z) { apply_swing_zone(p.timing, static_cast<int>(z)); },
             kSwingRadialLabels, 8, nullptr, 0, false});
 
-        add_seg(r, Segment {SegmentType::Radial, "Quant",
-            [&p]() { return static_cast<int32_t>(p.timing.quantize_grid); },
-            [&p](int32_t z) { p.timing.quantize_grid = static_cast<uint8_t>(z % 8); },
-            kQuantizeLabels, 8, nullptr, 0, false});
+        add_seg(r, Segment {SegmentType::Radial, "Hum",
+            [&p]() { return static_cast<int32_t>(hum_zone(p.timing)); },
+            [&p](int32_t z) { apply_hum_zone(p.timing, static_cast<int>(z)); },
+            kHumRadialLabels, 8, nullptr, 0, false});
 
         const ItemRef ref = emit_timing_block(c, p);
         add_seg(r, Segment {SegmentType::Param, "PRM", {}, {}, nullptr, 0, ref.items, ref.count, false});

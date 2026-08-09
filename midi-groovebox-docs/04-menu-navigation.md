@@ -45,19 +45,20 @@ AStyle, Strum), джойстик работает как радиальный с
 направлению** (см. `menu_items.cpp` — `direction_to_zone()`):
 
 | Zone | Направление | Scale | CType | AStyle | Strum |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 0 | Вверх | **Off** | **Off** | **Off** | **Off** |
-| 1 | Вверх-вправо | Major | Maj | Up | 5 мс |
-| 2 | Вправо | Minor | Min | Down | 10 |
-| 3 | Вниз-вправо | Dorian | Maj7 | Up-Down | 15 |
-| 4 | Вниз | Phrygian | Min7 | Down-Up | 20 |
-| 5 | Вниз-влево | Lydian | Dom7 | As Played | 25 |
-| 6 | Влево | Mixolydian | Sus4 | Random | 30 |
-| 7 | Вверх-влево | Blues | Power | Converge/Diverge | 35 |
+| 1 | Вверх-вправо | Major | Maj | Up | 10 мс |
+| 2 | Вправо | Minor | Min | Down | 20 |
+| 3 | Вниз-вправо | Dorian | Maj7 | Up-Down | 30 |
+| 4 | Вниз | Phrygian | Min7 | Down-Up | 40 |
+| 5 | Вниз-влево | Lydian | Dom7 | As Played | 50 |
+| 6 | Влево | Mixolydian | Sus4 | Random | 75 |
+| 7 | Вверх-влево | Blues | Power | Converge/Diverge | 100 |
 
 Зона 0 (вверх) в Scale/CType/AStyle = **Off** (блок выключен). Выбор Scale≠Off
 автоматически включает Key Filter; CType≠Off включает Chord; AStyle≠Off включает
 Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN есть).
+Strum-зоны теперь идут с шагом 10 мс до 100 мс (раньше до 35 мс, шаг 5).
 
 ## QUICK — главный экран (реально построенные строки, `build_quick_rows`)
 
@@ -67,12 +68,17 @@ Arp (отдельных свитчей в QUICK нет — в DETAIL/MAIN ест
 |---|---|---|
 | **Mode** | Toggle `KB` / `RND` | переключение MIDI-клавиатура ↔ случайная нота (клик подтверждает) |
 | **Key** | Linear `Key` (12 нот) + Radial `Scale` + `PRM` | Scale — зоны, Key — линейный (только выбираемая нота) |
-| **CHD** (только KB/RND/MidiFilter) | Radial `CType` + Radial `Strum` + `PRM` | порох, блок аккордов |
-| **Arp** (только KB/MidiFilter) | Radial `AStyle` + Toggle `Latch` + `PRM` | арпеджиатор |
-| **Time** (всегда) | Radial `Swing` + Radial `Quant` + `PRM` | тайминг, влияет на арп; PRM → BPM/Swing/Human/Quant/legato |
+| **CHD** (только KB/RND/MidiFilter) | Radial `Type` + Radial `Strum` + `PRM` | порох, блок аккордов |
+| **Arp** (только KB/MidiFilter) | Radial `Style` + Toggle `Latch` + `PRM` | арпеджиатор |
+| **Time** (всегда) | Radial `Swing` + Radial `Hum` + `PRM` | тайминг, влияет на арп; PRM → BPM/Swing/Human/Quant/legato |
 | **ADR** (всегда) | сводка On/Off, клик → DETAIL | блок ADSR: Switch, Atk, Dec, Sus, Rel, Sync |
 | **Dens** (только RND) | Linear `Dens` (0..100) | плотность/вероятность |
 | **Shape** (только RND) | Linear `Shape` (Asc/Desc/Arch/Rnd) | форма |
+
+Над строками QUICK выводится **строка подписей** параметров сфокусированной
+строки (например `Type Strum PRM`), чтобы всегда было понятно, какая ячейка что
+редактирует. Подписи обрезаются до ширины ячейки (макс. 5 символов × 6 px), поэтому
+строка целиком помещается в 132 px.
 
 Клик-цикл ячеек QUICK (кроме чеков/`PRM`): клик → edit mode (ячейка выделяется),
 джойстик меняет значение (линейные — влево/вправо, радиальные — зоны), повторный
@@ -104,7 +110,7 @@ Main
 │   │                    m7b5, Dim7, 9, 11, 13, Maj9, 7#5, 7#9, 7b9, 7#11,
 │   │                    Sus2, Sus4, 7s4, s2/7, Qrt, Qnt, Cls, Pow)
 │   ├── Voicing         (Blk / Strm / Roll)
-│   └── Strum           (1–100 мс)
+│   └── Strum           (1–150 мс)
 ├── Arpeggiator
 │   ├── Arp             (On / Off)
 │   ├── Latch           (On / Off)

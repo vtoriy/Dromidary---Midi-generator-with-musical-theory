@@ -31,6 +31,10 @@ constexpr int kStatusMetaX = 50;
 constexpr int kIconY = 2;
 constexpr int kIconSize = 3;
 constexpr int kProgressY = 7;  // thin blank row between status and content
+// QUICK screen caption line: names the columns of the focused row so it is
+// always clear which parameter each cell edits (fits inside 132px width).
+constexpr int kCaptionY = 8;
+constexpr int kCaptionRowH = 8;
 
 void draw_play_icon(DisplaySh1106& d) {
     // Right-pointing triangle.
@@ -250,6 +254,22 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     const MenuFrame& f = engine.current();
 
     if (engine.is_rows()) {
+        // Caption line for the focused row: names each edit cell so it is clear
+        // which parameter is being changed. Labels are truncated to the cell
+        // width (5 glyphs at 6 px) so the whole line stays inside 132 px.
+        const int cap_max = kCellW / DisplaySh1106::kTextAdvance;
+        if (f.cursor >= 0 && f.cursor < f.row_count) {
+            const QuickRow& prow = f.rows[f.cursor];
+            for (int si = 0; si < prow.seg_count && si < 3; ++si) {
+                const char* lbl = prow.segments[si].label ? prow.segments[si].label : "PRM";
+                char cap_lbl[8];
+                const int n = static_cast<int>(strlen(lbl)) > cap_max ? cap_max
+                                                                      : static_cast<int>(strlen(lbl));
+                std::memcpy(cap_lbl, lbl, static_cast<std::size_t>(n));
+                cap_lbl[n] = '\0';
+                display_->draw_text(cap_lbl, kColX[si] + kCellPad, kCaptionY);
+            }
+        }
         for (int i = 0; i < 6; ++i) {
             const int idx = f.offset + i;
             if (idx < 0 || idx >= f.row_count) {
@@ -257,7 +277,7 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
             }
             const QuickRow& row = f.rows[idx];
             const bool focused = (idx == f.cursor);
-            const int y = kContentY + i * kRowH;
+            const int y = kCaptionY + kCaptionRowH + i * kRowH;
 
             if (row.seg_count == 0 && row.summary_fn) {
                 // Summary-only row (ADSR): full-width line, inverted when focused.
