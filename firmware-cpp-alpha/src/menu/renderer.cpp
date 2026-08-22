@@ -136,9 +136,28 @@ int midi_note_octave(uint8_t midi) {
 
 void seg_value_text(const Segment& s, char* out, int cap) {
     if (s.type == SegmentType::Range) {
-        // "C1-C4": span string from the live min/max accessors.
+        // Span string from the live min/max accessors. min == max means the
+        // value is pinned — print it once ("'4", not "'4-'4").
         const int32_t lo = s.get_min ? s.get_min() : 0;
         const int32_t hi = s.get_max ? s.get_max() : 0;
+        if (s.label_fn) {
+            const char* lo_txt = s.label_fn(lo);
+            if (lo_txt != nullptr && lo == hi) {
+                snprintf(out, cap, "%s", lo_txt);
+                return;
+            }
+            const char* hi_txt = s.label_fn(hi);
+            if (lo_txt != nullptr && hi_txt != nullptr) {
+                snprintf(out, cap, "%s-%s", lo_txt, hi_txt);
+                return;
+            }
+        }
+        if (lo == hi) {
+            snprintf(out, cap, "%s%d",
+                     midi_note_glyph(static_cast<uint8_t>(lo)),
+                     midi_note_octave(static_cast<uint8_t>(lo)));
+            return;
+        }
         snprintf(out, cap, "%s%d-%s%d",
                  midi_note_glyph(static_cast<uint8_t>(lo)),
                  midi_note_octave(static_cast<uint8_t>(lo)),
@@ -211,6 +230,22 @@ void item_value_text(const MenuItem& it, char* out, int cap) {
             break;
         }
         case MenuItemType::NoteRange:
+            // "C3..B6" for notes, or the item's dynamic labels ("16..'2" for
+            // the length range). min == max prints a single value.
+            if (it.label_fn) {
+                const int32_t lo = it.get_min ? it.get_min() : 0;
+                const int32_t hi = it.get_max ? it.get_max() : 0;
+                const char* lo_txt = it.label_fn(lo);
+                if (lo_txt != nullptr && lo == hi) {
+                    snprintf(out, cap, "%s", lo_txt);
+                    break;
+                }
+                const char* hi_txt = it.label_fn(hi);
+                if (lo_txt != nullptr && hi_txt != nullptr) {
+                    snprintf(out, cap, "%s..%s", lo_txt, hi_txt);
+                    break;
+                }
+            }
             // "C3..B6": min on the left, max on the right, `#` strip between.
             snprintf(out, cap, "%s%d..%s%d",
                      midi_note_glyph(static_cast<uint8_t>(it.get_min())),
@@ -265,11 +300,14 @@ void draw_range_band(DisplaySh1106& d, const MenuItem& it, int y, bool focused) 
     }
     const int32_t lo = it.get_min();
     const int32_t hi = it.get_max();
-    const int32_t span = (kNoteRangeMax - kNoteRangeMin);
+    // Scale the band over the item's own editable span (MIDI notes by default,
+    // division indices for the length-range item).
+    const int32_t b_lo = it.min_v;
+    const int32_t span = (it.max_v - b_lo);
     int x = (span <= 0) ? 0
-                        : (static_cast<int>(lo) - kNoteRangeMin) * DisplaySh1106::kWidth / span;
+                        : (static_cast<int>(lo) - b_lo) * DisplaySh1106::kWidth / span;
     int w = (span <= 0) ? DisplaySh1106::kWidth
-                        : (static_cast<int>(hi) - kNoteRangeMin) * DisplaySh1106::kWidth / span - x;
+                        : (static_cast<int>(hi) - b_lo) * DisplaySh1106::kWidth / span - x;
     if (w < 1) {
         w = 1;
     }
@@ -290,11 +328,14 @@ void draw_seg_range_band(DisplaySh1106& d, const Segment& s, int y, bool focused
     }
     const int32_t lo = s.get_min();
     const int32_t hi = s.get_max();
-    const int32_t span = (kNoteRangeMax - kNoteRangeMin);
+    // Scale the band over the segment's own bounds (MIDI notes by default,
+    // division indices for the length-range cell).
+    const int32_t b_lo = s.bound_lo;
+    const int32_t span = (s.bound_hi - b_lo);
     int x = (span <= 0) ? 0
-                        : (static_cast<int>(lo) - kNoteRangeMin) * DisplaySh1106::kWidth / span;
+                        : (static_cast<int>(lo) - b_lo) * DisplaySh1106::kWidth / span;
     int w = (span <= 0) ? DisplaySh1106::kWidth
-                        : (static_cast<int>(hi) - kNoteRangeMin) * DisplaySh1106::kWidth / span - x;
+                        : (static_cast<int>(hi) - b_lo) * DisplaySh1106::kWidth / span - x;
     if (w < 1) {
         w = 1;
     }
@@ -513,8 +554,12 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
                 const bool inverted = focused && (si == f.seg);
                 const bool edited = inverted && engine.quick_edited();
                 draw_quick_cell(*display_, si, y, cell, inverted, edited);
-                if (s.type == SegmentType::Range) {
-                    draw_seg_range_band(*display_, s, y, focused);
+                // The span band is drawn only while THIS range cell is being
+                // edited: the Rand row carries two range cells (pitch + length)
+                // and two always-on bands would overlap and mislead.
+                if (s.type == SegmentType::Range && focused && si == f.seg &&
+                    engine.edit_mode()) {
+                    draw_seg_range_band(*display_, s, y, true);
                 }
             }
 

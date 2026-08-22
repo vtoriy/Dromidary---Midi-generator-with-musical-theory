@@ -22,7 +22,7 @@ private:
     void process_joystick(uint32_t raw, uint32_t now_ms);
     void update_midi_clock(uint32_t now_ms);
     void update_beat(uint32_t now_ms);
-    void update_idle_screensaver(uint32_t now_ms);
+    void update_idle_screensaver(uint32_t now_ms, bool fresh_input);
     bool is_pressed(uint32_t raw, uint8_t bit) const;
     uint8_t button_to_note(uint8_t index) const;
 
@@ -88,6 +88,9 @@ private:
     uint32_t last_input_ms_ {0};
     ScreenMode screensaver_origin_ {ScreenMode::Quick};
     bool screensaver_active_ {false};
+    ScreenMode last_screen_mode_ {ScreenMode::Quick};  // detects manual Anim entry
+    uint32_t suppress_wake_until_ {0};  // ignore wake edges right after manual entry
+    bool last_len_triplets_ {false};    // rebuild menu when the triplet filter flips
     // Slave: received-tick rate estimator. The interval between two F8s is
     // averaged into clock_avg_interval_ and converted to BPM for the pattern.
     uint32_t clock_last_rx_ms_ {0};

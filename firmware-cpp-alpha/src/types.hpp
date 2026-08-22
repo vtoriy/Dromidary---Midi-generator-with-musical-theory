@@ -202,9 +202,15 @@ struct TransposeCfg {
 
 struct RandomCfg {
     uint8_t density_or_probability {50};  // 0..100
-    uint8_t shape {0};                    // index into kShapeOptions
+    uint8_t shape {0};                    // index into kShapeOptions (reserved)
     uint8_t note_min {24};                // lower bound of the random note range (MIDI, C1 default)
-    uint8_t note_max {108};               // upper bound of the random note range (MIDI, C8 default)
+    uint8_t note_max {35};                // upper bound of the random note range (MIDI, B1 default)
+    uint8_t len_min_idx {8};              // LEN lower bound (kNoteLenDivs, "8" = 1/8)
+    uint8_t len_max_idx {8};              // LEN upper bound (kNoteLenDivs, "8" = 1/8)
+    uint8_t repeat {0};                   // anchor-repeat chance in tens of %: 0..9 => 0..90 %
+    bool len_chain {true};                // true = chained lengths (next onset follows the
+                                          // gate end); false = ARP Rate grid, length capped
+    bool len_triplets {false};            // include triplet divisions in the LEN list
 };
 
 // Persistent input-click timing settings (survive device reboot).
@@ -324,6 +330,10 @@ struct Segment {
     IntSetter set_min;
     IntGetter get_max;
     IntSetter set_max;
+    // Editable bounds for the tilt editor (clamps of min/max). Defaults target
+    // MIDI notes; length-range cells override them with their own index span.
+    int32_t bound_lo {kNoteRangeMin};
+    int32_t bound_hi {kNoteRangeMax};
 };
 
 constexpr int kMaxSegsPerRow = 3;

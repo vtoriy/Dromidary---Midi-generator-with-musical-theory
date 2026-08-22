@@ -197,6 +197,45 @@ MenuItem note_range_item(const char* label, IntGetter get_min, IntSetter set_min
     return m;
 }
 
+// 2D length-range item (DETAIL/FULL Randomize): same "min..max" interaction as
+// the note range, over visible positions of the (triplet-filtered) division
+// list. Storage keeps real kNoteLenDivs indices.
+MenuItem len_range_item(const char* label, Pattern& p) {
+    MenuItem m;
+    m.type = MenuItemType::NoteRange;
+    m.label = label;
+    m.min_v = 0;
+    m.max_v = kNoteLenDivCount - 1;
+    m.step = 1;
+    m.label_fn = [&p](int32_t pos) -> const char* {
+        return kNoteLenDivs[note_len_div_real(static_cast<int>(pos),
+                                              p.random.len_triplets)];
+    };
+    m.get_min = [&p]() {
+        return note_len_div_pos(p.random.len_min_idx, p.random.len_triplets);
+    };
+    m.set_min = [&p](int32_t v) {
+        int32_t lo = v;
+        const int32_t hi_pos =
+            note_len_div_pos(p.random.len_max_idx, p.random.len_triplets);
+        if (lo > hi_pos) { lo = hi_pos; }
+        p.random.len_min_idx =
+            static_cast<uint8_t>(note_len_div_real(lo, p.random.len_triplets));
+    };
+    m.get_max = [&p]() {
+        return note_len_div_pos(p.random.len_max_idx, p.random.len_triplets);
+    };
+    m.set_max = [&p](int32_t v) {
+        int32_t hi = v;
+        const int32_t lo_pos =
+            note_len_div_pos(p.random.len_min_idx, p.random.len_triplets);
+        if (hi < lo_pos) { hi = lo_pos; }
+        p.random.len_max_idx =
+            static_cast<uint8_t>(note_len_div_real(hi, p.random.len_triplets));
+    };
+    return m;
+}
+
 // ---------------------------------------------------------------------------
 // Shared per-block builders. Used BOTH by the QUICK `PRM` DETAIL submenu and
 // by the FULL menu section, so DETAIL and FULL always expose identical content.
@@ -273,7 +312,7 @@ ItemRef emit_arp_block(MenuContent& c, Pattern& p) {
     return wrap_ref(c, start);
 }
 
-ItemRef emit_timing_block(MenuContent& c, Pattern& p) {
+ItemRef emit_timing_block(MenuContent& c, Pattern& p, AppState* st) {
     const std::size_t start = c.item_count;
     emit(c, int_slider_io("BPM",
         [&p]() { return static_cast<int32_t>(p.timing.bpm); },
@@ -295,6 +334,11 @@ ItemRef emit_timing_block(MenuContent& c, Pattern& p) {
         [&p]() { return static_cast<int32_t>(p.timing.clock); },
         [&p](int32_t v) { p.timing.clock = static_cast<ClockSync>(v % static_cast<int>(ClockSync::kCount)); },
         kClockSyncLabels, static_cast<int>(ClockSync::kCount)));
+    // Triplet filter for the RND note-length list (LEN cell / engine draws).
+    emit(c, option_idx_io("Triplets",
+        [st]() { return st->active_pattern().random.len_triplets ? 1 : 0; },
+        [st](int32_t v) { st->active_pattern().random.len_triplets = (v != 0); },
+        kOnOffLabels, 2));
     return wrap_ref(c, start);
 }
 
@@ -326,7 +370,7 @@ ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
     const std::size_t start = c.item_count;
     emit(c, int_slider_io("Density",
         [&p]() { return static_cast<int32_t>(p.random.density_or_probability); },
-        [&p](int32_t v) { p.random.density_or_probability = static_cast<uint8_t>(v); }, 0, 100));
+        [&p](int32_t v) { p.random.density_or_probability = static_cast<uint8_t>(v); }, 0, 100, 10));
     emit(c, option_idx_io("Shape",
         [&p]() { return static_cast<int32_t>(p.random.shape); },
         [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v % 4); },
@@ -346,6 +390,14 @@ ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
             if (hi < lo) { hi = lo; }
             p.random.note_max = static_cast<uint8_t>(hi);
         }));
+    emit(c, len_range_item("Len Range", p));
+    // Len Chain: On = the next RND onset lands on the drawn gate's end
+    // (duration-driven, ARP Rate ignored for spacing). Off = steps stay on the
+    // ARP Rate grid with the length capped by the step.
+    emit(c, option_idx_io("Len Chain",
+        [&p]() { return p.random.len_chain ? 1 : 0; },
+        [&p](int32_t v) { p.random.len_chain = (v != 0); },
+        kOnOffLabels, 2));
     return wrap_ref(c, start);
 }
 
@@ -633,10 +685,14 @@ void build_quick_rows(AppState* st, MenuContent& c) {
 
     // ---- Random range row (RandomNote only): quick access to the note span;
     // click on the row name opens the full Randomize DETAIL (same items as
-    // FULL). The note range shows as a "C1-C4" cell plus a band under the row. --
+    // FULL). The label is "Rand" — "RND" is reserved for the mode indicator in
+    // the status-bar header, and a same-named row under it reads as duplication.
     if (mode == PlayMode::RandomNote) {
-        QuickRow& r = add_row("RND");
-        add_seg(r, Segment {SegmentType::Range, "NT_RNG",
+        QuickRow& r = add_row("Rand");
+
+        // Cell 1: pitch range (min..max MIDI note). Short caption labels —
+        // three cells must fit the caption line without overlapping.
+        add_seg(r, Segment {SegmentType::Range, "PITCH",
             nullptr, nullptr, nullptr, 0, nullptr, 0, false});
         r.segments[r.seg_count - 1].get_min = [&p]() { return static_cast<int32_t>(p.random.note_min); };
         r.segments[r.seg_count - 1].set_min = [&p](int32_t v) {
@@ -652,6 +708,50 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             if (hi < lo) { hi = lo; }
             p.random.note_max = static_cast<uint8_t>(hi);
         };
+
+        // Cell 2: gate-length range ("16-8") over the (possibly triplet-filtered)
+        // division list. Accessors work in VISIBLE positions; storage keeps the
+        // real kNoteLenDivs index so toggling Triplets never corrupts values.
+        auto len_label_fn = [&p](int32_t pos) -> const char* {
+            return kNoteLenDivs[note_len_div_real(static_cast<int>(pos),
+                                                  p.random.len_triplets)];
+        };
+        add_seg(r, Segment {SegmentType::Range, "LEN",
+            nullptr, nullptr, nullptr, 0, nullptr, 0, false,
+            std::move(len_label_fn)});
+        r.segments[r.seg_count - 1].bound_lo = 0;
+        r.segments[r.seg_count - 1].bound_hi = note_len_div_count(p.random.len_triplets) - 1;
+        r.segments[r.seg_count - 1].get_min = [&p]() {
+            return note_len_div_pos(p.random.len_min_idx, p.random.len_triplets);
+        };
+        r.segments[r.seg_count - 1].set_min = [&p](int32_t v) {
+            const int32_t hi_pos =
+                note_len_div_pos(p.random.len_max_idx, p.random.len_triplets);
+            int32_t lo = v;
+            if (lo > hi_pos) { lo = hi_pos; }
+            p.random.len_min_idx = static_cast<uint8_t>(note_len_div_real(lo, p.random.len_triplets));
+        };
+        r.segments[r.seg_count - 1].get_max = [&p]() {
+            return note_len_div_pos(p.random.len_max_idx, p.random.len_triplets);
+        };
+        r.segments[r.seg_count - 1].set_max = [&p](int32_t v) {
+            const int32_t lo_pos =
+                note_len_div_pos(p.random.len_min_idx, p.random.len_triplets);
+            int32_t hi = v;
+            if (hi < lo_pos) { hi = lo_pos; }
+            p.random.len_max_idx = static_cast<uint8_t>(note_len_div_real(hi, p.random.len_triplets));
+        };
+
+        // Cell 3: anchor-repeat chance, 0..90 % step 10 (stored as tens).
+        auto rep_label_fn = [](int32_t v) -> const char* {
+            static char buf[5];
+            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(v) * 10);
+            return buf;
+        };
+        add_seg(r, Segment {SegmentType::Linear, "REP",
+            [&p]() { return static_cast<int32_t>(p.random.repeat); },
+            [&p](int32_t v) { p.random.repeat = static_cast<uint8_t>(std::clamp<int32_t>(v, 0, 9)); },
+            nullptr, 10, nullptr, 0, false, std::move(rep_label_fn)});
 
         const ItemRef ref = emit_randomize_block(c, p);
         r.submenu = ref.items;
@@ -677,7 +777,7 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t v) { p.timing.bpm = static_cast<uint16_t>(v); },
             nullptr, 281, nullptr, 0, false});
 
-        const ItemRef ref = emit_timing_block(c, p);
+        const ItemRef ref = emit_timing_block(c, p, st);
         r.submenu = ref.items;
         r.submenu_count = ref.count;
     }
@@ -691,16 +791,25 @@ void build_quick_rows(AppState* st, MenuContent& c) {
         r.summary_fn = [&p]() { return p.gate.enabled ? "On" : "Off"; };
     }
 
-    // ---- Dens / Shape rows (random modes) ----
+    // ---- Other row: density + reserved shape (random modes), one row ----
     if (mode == PlayMode::RandomPattern || mode == PlayMode::RandomNote) {
-        QuickRow& r = add_row("Dens");
+        QuickRow& r = add_row("Other");
+        // Density steps in 10% increments: the cell stores the tens index and
+        // prints it as percent.
+        auto dens_label_fn = [](int32_t v) -> const char* {
+            static char buf[5];
+            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(v) * 10);
+            return buf;
+        };
         add_seg(r, Segment {SegmentType::Linear, "Dens",
-            [&p]() { return static_cast<int32_t>(p.random.density_or_probability); },
-            [&p](int32_t v) { p.random.density_or_probability = static_cast<uint8_t>(v); },
-            nullptr, 101, nullptr, 0, false});
+            [&p]() { return static_cast<int32_t>(p.random.density_or_probability / 10); },
+            [&p](int32_t v) {
+                p.random.density_or_probability =
+                    static_cast<uint8_t>(std::clamp<int32_t>(v, 0, 10) * 10);
+            },
+            nullptr, 11, nullptr, 0, false, std::move(dens_label_fn)});
 
-        QuickRow& r2 = add_row("Shape");
-        add_seg(r2, Segment {SegmentType::Linear, "Shape",
+        add_seg(r, Segment {SegmentType::Linear, "Shape",
             [&p]() { return static_cast<int32_t>(p.random.shape); },
             [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v); },
             kShapeLabels, 4, nullptr, 0, false});
@@ -782,7 +891,7 @@ void build_full_menu(AppState* st, MenuContent& c) {
 
     // Timing
     timing_start = c.item_count;
-    emit_timing_block(c, p);
+    emit_timing_block(c, p, st);
     timing_count = static_cast<int>(c.item_count - timing_start);
 
     // Gate / ADSR (same 6-parameter block as the Quick DETAIL submenu)
@@ -830,10 +939,13 @@ void build_full_menu(AppState* st, MenuContent& c) {
     emit(c, int_slider_io("Click Lng",
         [st]() { return static_cast<int32_t>(st->runtime.click.long_ms); },
         [st](int32_t v) { st->runtime.click.long_ms = static_cast<uint16_t>(v); }, 200, 2000));
+    // Screensaver timeout + manual animation launch.
     emit(c, int_slider_io("Idle Anim",
         [st]() { return static_cast<int32_t>(st->runtime.click.idle_ms); },
         [st](int32_t v) { st->runtime.click.idle_ms = static_cast<uint32_t>(v); },
         10000, 120000, 5000));
+    emit(c, action_item("Anim",
+        [st]() { st->runtime.screen_mode = ScreenMode::Animation; }));
     emit(c, action_item("Test", [st]() { st->runtime.test_mode = true; }));
     sys_count = static_cast<int>(c.item_count - sys_start);
 

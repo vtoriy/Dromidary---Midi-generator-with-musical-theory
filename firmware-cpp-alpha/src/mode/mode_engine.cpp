@@ -499,27 +499,84 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         return;
     }
     const Pattern& p = state_->active_pattern();
-    const uint8_t picked = pick_random_note(random_anchor_);
+    const RandomCfg& rnd = p.random;
+    const uint32_t interval = arp_interval_ms(p.arp, p.timing.bpm);
     const uint32_t attack = gate_attack_ms();
     const uint32_t release = gate_release_ms();
-    if (picked == last_random_note_ && last_random_note_ != 0) {
-        // Keep the note ringing; only retrigger when a different tone is drawn.
-        next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
+    uint32_t boundary = 0;
+
+    // Repeatability: with probability repeat*10 % echo the anchor note (the
+    // key that started the run, or the latest pressed key) instead of drawing
+    // a fresh tone. The anchor goes out as-is: it is the player's explicit
+    // input, so range and scale filters do not clip it.
+    uint8_t picked;
+    const uint16_t rep_pct = static_cast<uint16_t>(rnd.repeat) * 10u;
+    if (rep_pct > 0 && rng_.range(100) < rep_pct) {
+        picked = random_anchor_;
+    } else {
+        picked = pick_random_note(random_anchor_);
+    }
+
+    // Draw the gate length inside the configured LEN span (visible positions
+    // honour the triplet filter; storage keeps real table indices).
+    {
+        const bool tr = rnd.len_triplets;
+        int vis_lo = note_len_div_pos(rnd.len_min_idx, tr);
+        int vis_hi = note_len_div_pos(rnd.len_max_idx, tr);
+        if (vis_lo > vis_hi) { const int t = vis_lo; vis_lo = vis_hi; vis_hi = t; }
+        const int vis_max = note_len_div_count(tr) - 1;
+        if (vis_hi > vis_max) { vis_hi = vis_max; }
+        if (vis_lo > vis_hi) { vis_lo = vis_hi; }
+        const int vis =
+            vis_lo + static_cast<int>(rng_.range(static_cast<uint32_t>(vis_hi - vis_lo + 1)));
+        boundary = note_len_ms(note_len_div_real(vis, tr), p.timing.bpm);
+    }
+
+    if (!rnd.len_chain) {
+        // Grid mode (Len Chain Off): steps stay on the ARP Rate grid and the
+        // drawn length is capped by the step; identical redraws ring through.
+        if (picked == last_random_note_ && last_random_note_ != 0) {
+            next_random_ms_ = now_ms + interval;
+            return;
+        }
+        if (last_random_note_ != 0 && midi_) {
+            schedule_pending(now_ms + release, last_random_note_, false);
+        }
+        last_random_note_ = picked;
+        if (midi_) {
+            schedule_pending(now_ms + attack, picked, true);
+            if (boundary > interval) { boundary = interval; }
+            schedule_pending(now_ms + boundary + release, picked, false);
+        }
+        if (state_ != nullptr) {
+            state_->runtime.last_note = picked;
+            state_->runtime.show_note = true;
+        }
+        ui_repaint_ = true;
+        next_random_ms_ = now_ms + interval;
         return;
     }
+
+    // Chained mode (Len Chain On): every step is an articulated event — off,
+    // on, timed off — and the next onset lands exactly on this gate's end, so
+    // a "64" note is followed immediately by whatever length comes next. The
+    // ARP Rate does not space RND notes here (BPM still scales divisions).
+    // Identical tones retrigger too: REP repeats become rhythmic pulses.
+    if (boundary < 20) { boundary = 20; }  // USB MIDI sanity floor
     if (last_random_note_ != 0 && midi_) {
         schedule_pending(now_ms + release, last_random_note_, false);
     }
     last_random_note_ = picked;
     if (midi_) {
         schedule_pending(now_ms + attack, picked, true);
+        schedule_pending(now_ms + boundary + release, picked, false);
     }
     if (state_ != nullptr) {
         state_->runtime.last_note = picked;
         state_->runtime.show_note = true;
     }
     ui_repaint_ = true;
-    next_random_ms_ = now_ms + arp_interval_ms(p.arp, p.timing.bpm);
+    next_random_ms_ = now_ms + boundary;
 }
 
 uint8_t ModeEngine::pick_random_note(uint8_t anchor) {

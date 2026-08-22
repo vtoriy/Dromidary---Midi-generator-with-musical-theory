@@ -17,6 +17,7 @@ constexpr uint8_t kKeyDebounce = 5;
 constexpr uint32_t kJoyRepeatMs = 190;
 constexpr uint32_t kFlushMs = 40;
 constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
+constexpr uint32_t kManualAnimWakeGuardMs = 400; // ignore wake edges after manual launch
 constexpr uint32_t kPersistSaveDelayMs = 500; // wait 0.5s of no edits before flashing
 
 // MIDI Clock: 24 pulses per quarter note (as with a DIN sync box).
@@ -466,7 +467,7 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
     }
 }
 
-void AppLoop::update_idle_screensaver(uint32_t now_ms) {
+void AppLoop::update_idle_screensaver(uint32_t now_ms, bool fresh_input) {
     auto& runtime = state_.runtime;
     if (runtime.test_mode) {
         return;
@@ -486,9 +487,11 @@ void AppLoop::update_idle_screensaver(uint32_t now_ms) {
         }
         return;
     }
-    // In the auto-entered animation, any fresh press wakes back to the
-    // interactive screen. Manual animation (chosen via long-press) is left.
-    if (screensaver_active_ && now_ms - last_input_ms_ < idle) {
+    // In the animation, any FRESH input edge wakes back to the origin screen.
+    // The edge (not the idle window) is the trigger: a manually launched run
+    // re-anchors last_input_ms_ at adoption, and the activating click itself
+    // must not undo it — hence the short post-entry suppression window.
+    if (screensaver_active_ && fresh_input && now_ms >= suppress_wake_until_) {
         screensaver_active_ = false;
         runtime.screen_mode = screensaver_origin_;
         menu_.rebuild();
@@ -566,7 +569,7 @@ void AppLoop::update_beat(uint32_t now_ms) {
         }
 
         // Idle screensaver: Animate after kScreensaverIdleMs without input.
-        update_idle_screensaver(now_ms);
+        update_idle_screensaver(now_ms, activity);
 
         // Raw note-key image for the test screen: bit i = key i pressed.
         state_.runtime.note_bits = static_cast<uint16_t>(~raw & 0xFFFFu);
@@ -618,6 +621,32 @@ void AppLoop::update_beat(uint32_t now_ms) {
             mode_.random_loop_stop();
             menu_.rebuild();
             last_mode_ = state_.runtime.mode;
+            ui_dirty_ = true;
+        }
+
+        // Animation entered by hand (Timing -> Anim): adopt the switch into the
+        // screensaver contract, so any input returns to this very screen.
+        // last_input_ms_ is re-anchored and a short suppression window is set
+        // because the activating click itself is fresh input — without this
+        // the animation would wake instantly.
+        if (state_.runtime.screen_mode != last_screen_mode_) {
+            if (state_.runtime.screen_mode == ScreenMode::Animation &&
+                !screensaver_active_) {
+                screensaver_origin_ = last_screen_mode_;
+                screensaver_active_ = true;
+                last_input_ms_ = now_ms;
+                suppress_wake_until_ = now_ms + kManualAnimWakeGuardMs;
+                menu_.rebuild();
+                ui_dirty_ = true;
+            }
+            last_screen_mode_ = state_.runtime.screen_mode;
+        }
+
+        // Triplet filter changed: the LEN cell bounds and labels come from the
+        // filtered division list, so rebuild the menu to refresh them.
+        if (state_.active_pattern().random.len_triplets != last_len_triplets_) {
+            last_len_triplets_ = state_.active_pattern().random.len_triplets;
+            menu_.rebuild();
             ui_dirty_ = true;
         }
 
