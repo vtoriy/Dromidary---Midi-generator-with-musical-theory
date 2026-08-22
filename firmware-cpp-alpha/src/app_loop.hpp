@@ -20,6 +20,9 @@ private:
     void process_functional(uint32_t raw, uint32_t now_ms);
     void process_notes(uint32_t raw, uint32_t now_ms);
     void process_joystick(uint32_t raw, uint32_t now_ms);
+    void update_midi_clock(uint32_t now_ms);
+    void update_beat(uint32_t now_ms);
+    void update_idle_screensaver(uint32_t now_ms, bool fresh_input);
     bool is_pressed(uint32_t raw, uint8_t bit) const;
     uint8_t button_to_note(uint8_t index) const;
 
@@ -70,6 +73,30 @@ private:
     uint32_t last_flush_ms_ {0};
     uint32_t last_anim_ms_ {0};
     bool ui_dirty_ {true};
+
+    // MIDI Clock sync state.
+    // Master: 24 ppqn ticker against runtime.playing.
+    uint32_t clock_tick_ms_ {0};      // wall-clock anchor for the next master tick
+    bool master_started_ {false};     // start/continue already sent for this run
+    // Live transport-metronome state: advances runtime.beat (0..3) at quarter
+    // tempo while playing, so the status dial rotates without a pattern run.
+    uint32_t beat_tick_ms_ {0};       // wall-clock anchor for the next quarter
+
+    // Idle screensaver: auto-switches Quick/Full to the Animation screen after
+    // kScreensaverIdleMs of no user input, and returns to the last interactive
+    // screen on the first press afterwards.
+    uint32_t last_input_ms_ {0};
+    ScreenMode screensaver_origin_ {ScreenMode::Quick};
+    bool screensaver_active_ {false};
+    ScreenMode last_screen_mode_ {ScreenMode::Quick};  // detects manual Anim entry
+    uint32_t suppress_wake_until_ {0};  // ignore wake edges right after manual entry
+    bool last_len_triplets_ {false};    // rebuild menu when the triplet filter flips
+    // Slave: received-tick rate estimator. The interval between two F8s is
+    // averaged into clock_avg_interval_ and converted to BPM for the pattern.
+    uint32_t clock_last_rx_ms_ {0};
+    uint32_t clock_sample_interval_ {0};  // last F8..F8 gap (ms)
+    uint32_t clock_avg_interval_ {0};     // smoothed gap (ms); 0 = no sample yet
+    bool slave_running_ {false};          // 0xFA/0xFB seen, waiting for F8 stream
 };
 
 }  // namespace drom

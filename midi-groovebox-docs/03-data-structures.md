@@ -75,6 +75,7 @@ struct ArpCfg {
 
 struct TimingCfg {
     uint16_t bpm {120};          // темп, 20..300
+    ClockSync clock {ClockSync::Off}; // MIDI Clock: Off / Master / Slave
     uint8_t swing_pct {0};       // задержка "off-beat" шага арпа (0..100)
     uint8_t humanize_ms {0};     // псевдослучайный сдвиг шага арпа (0..50)
     uint8_t quantize_grid {0};   // индекс в kQuantizeGrids (0 = Off)
@@ -101,14 +102,46 @@ struct TransposeCfg {
 };
 
 struct RandomCfg {
-    uint8_t density_or_probability {50}; // 0..100
-    uint8_t shape {0};                   // индекс в kShapeOptions (Asc/Desc/Arch/Rnd)
+    uint8_t density_or_probability {50}; // 0..100 (зарезервировано)
+    uint8_t shape {0};                   // индекс в kShapeOptions (Asc/Desc/Arch/Rnd, зарезервировано)
+    uint8_t note_min {24};               // Note Range: нижняя граница (MIDI note)
+    uint8_t note_max {35};               // Note Range: верхняя граница (B1)
+    uint8_t len_min_idx {8};             // LEN: нижняя длина (kNoteLenDivs, "8" = 1/8)
+    uint8_t len_max_idx {8};             // LEN: верхняя длина ("8" — фиксированная 1/8)
+    uint8_t repeat {0};                  // REP: шанс повтора якоря, десятки % (0..9 => 0..90 %)
+    bool len_chain {true};               // цепочка длин включена по умолчанию
+    bool len_triplets {false};           // триоли в списке длин (Timing → Triplets)
 };
 ```
 
 > `density_or_probability` в alpha используется как вероятность появления ноты в
 > потоке RandomNote (в UI — ячейка Dens); полноценная генерация случайных паттернов
 > с диапазоном/длиной/velocity отложена (см. `07-roadmap-open-questions.md`).
+> Диапазон нот (`note_min/note_max`) редактируется через `NoteRange`-пункт
+> (`Randomize → Note Range`), границы 12..119 (C0..B8) — `kNoteRangeMin/Max`.
+>
+> **LEN** (`len_min_idx/len_max_idx`) — диапазон длины ноты по таблице
+> `kNoteLenDivs[16]`, компактные метки: `128 96 64 48 32 24 16 12 8 6 4 3 2`
+> (= 1/N) и `'1 '2 '4` (целая, две, четыре целых). На каждом шаге RND
+> длительность гейта тянется равномерно из диапазона; **min == max фиксирует
+> длину** (дефолт — фиксированная 1/8). Хранение — реальные индексы таблицы;
+> редактирование идёт по «видимым» позициям отфильтрованного списка. Release
+> (Gate ADSR) сдвигает фактический Off позже границы.
+>
+> **Triplets** (`len_triplets`, Timing → Triplets, дефолт Off) — выключено:
+> в списке LEN только прямые деления (128/64/32/16/8/4/2/'1/'2/'4); включено:
+> добавляются триоли (96/48/24/12/6/3). Смена флага перестраивает меню.
+>
+> **Len Chain** (`len_chain`, FULL → Randomize, дефолт On):
+> - **On** — свободная цепочка: следующий onset равен концу гейта предыдущей
+>   ноты (ARP Rate на расстановку нот RND не влияет), каждый шаг артикулируется
+>   (off→on→timed off), пол шага 20 мс;
+> - **Off** — шаги по сетке ARP Rate, длина капится интервалом шага.
+>
+> **REP** (`repeat`) — вероятность того, что шаг сыграет якорную ноту
+> (первая нота старта рандомизации / последняя нажатая пользователем клавиша),
+> вместо розыгрыша из диапазона. Якорь идёт напрямую — без подрезки PITCH и
+> фильтра лада.
 
 ## Slot (слот хранения)
 
@@ -153,6 +186,7 @@ struct ClickSettings {
     uint16_t debounce_ms {12};  // фильтр дребезга функц. кнопок (3..60)
     uint16_t double_ms {300};   // окно двойного клика (100..1000)
     uint16_t long_ms {800};     // порог long-press джойстика (200..2000)
+    uint32_t idle_ms   {10000}; // таймер скринсейвера (10..120 с, шаг 5 с)
 };
 ```
 
@@ -161,10 +195,13 @@ struct ClickSettings {
 
 ```
 magic   = 0x44524F4D ("DROM")
-version = 1
+version = 3
 click   = ClickSettings
 crc     = CRC32(click)
 ```
+
+Смена `version` аннулирует прежние блоки: при несовпадении версии
+`persist_load_click` возвращает умолчания (idle_ms = 10000).
 
 Загрузка при старте (`persist_load_click`): если magic/version не совпадают —
 остаются дефолты из структуры. Запись (`persist_save_click`) — через
@@ -189,6 +226,7 @@ enum class ArpStyle    { Off, Up, Down, UpDown, DownUp, UpDownRep, DownUpRep,
                          PinkyUp, PinkyUpDown, ThumbUp, ThumbUpDown,
                          AsPlayed, ChordTrigger, Random, RandomOnce, RandomOther, kCount };
 enum class RateMode    { Note, Ms, kCount };
+enum class ClockSync   { Off, Master, Slave, kCount };  // Timing → Clock
 ```
 
 ## MenuItem / Segment (модель меню)
@@ -197,7 +235,7 @@ enum class RateMode    { Note, Ms, kCount };
 редактируются live через getter/setter (`std::function`).
 
 ```cpp
-enum class MenuItemType { Section, Group, Toggle, Option, IntSlider, Rate, Action };
+enum class MenuItemType { Section, Group, Toggle, Option, IntSlider, Rate, NoteRange, Action };
 struct MenuItem {
     MenuItemType type;
     const char* label;
@@ -208,6 +246,9 @@ struct MenuItem {
     std::function<const char*(int32_t)> label_fn;  // динамическая подпись
     std::function<int32_t()> unit_get;             // Rate: 0=Note, 1=Ms
     std::function<void()> action;                  // Action-пункты
+    // NoteRange: независимые границы (min/max). min_v..max_v = пределы 12..119.
+    IntGetter get_min; IntSetter set_min;
+    IntGetter get_max; IntSetter set_max;
 };
 ```
 
@@ -222,11 +263,17 @@ struct Segment {
     const char* const* labels; int count;
     const MenuItem* children; int child_count;   // для Param → DETAIL
     bool direct;                                 // правка сразу без клика
+    std::function<const char*(int32_t)> label_fn;  // динамическая подпись ячейки
 };
 struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_count;
                   const MenuItem* submenu; int submenu_count;
                   std::function<const char*()> summary_fn; };
 ```
+
+Quick-ячейка `seg` может принимать значение **−1** = фокус на имени строки
+(`menu_engine.cpp`): наклон влево с ячейки 0, `current_segment()` вернёт nullptr,
+клик откроет DETAIL (`row.submenu`). В строке QUICK хранится её подменю
+(`submenu/submenu_count`, заполняется из `emit_*_block`).
 
 ## Таблицы вариантов (label → enum)
 
@@ -236,6 +283,7 @@ struct QuickRow { const char* label; std::array<Segment,3> segments; int seg_cou
 - `kAStyleFullLabels` (19) — соответствуют `ArpStyle` в порядке enum (см. полный список в `types.hpp`).
 - `kQuantizeLabels` (8): Off, 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/4T, 1/4.
 - `kShapeLabels` (4): Asc, Desc, Arch, Rnd.
+- `kClockSyncLabels` (3): Off, Master, Slave.
 - Радиальные (8 зон): `kScaleRadialLabels` = Off,Maj,Min,Dor,Phr,Lyd,Mix,Blu;
   `kCTypeRadialLabels` = Off,Maj,Min,Maj7,Min7,7,Sus4,Pow;
   `kAStyleRadialLabels` = Off,Up,Down,UpDn,DnUp,Play,Rnd,CvDv;
