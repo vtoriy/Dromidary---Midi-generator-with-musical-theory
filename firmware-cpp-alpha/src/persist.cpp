@@ -11,7 +11,7 @@ namespace drom {
 namespace {
 
 constexpr uint32_t kMagic = 0x44524F4D;  // "DROM"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 3;
 constexpr uint32_t kFlashOffset = PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE;
 
 struct PersistBlock {

@@ -27,21 +27,21 @@ constexpr int kCellPad = 2;
 // beat meter on the right. The mode name is drawn at x=0; the transport icons
 // live in the gutter right after it (x=36/43/46), so the octave/bpm/step meta
 // must start AFTER the icons.
-constexpr int kPlayIconX = 36;
+constexpr int kPlayIconX = 34;
 constexpr int kRecIconX = 43;
-constexpr int kNoteIconX = 47;  // quarter-note icon, right of the rec dot
-constexpr int kStatusMetaX = 52;
-constexpr int kIconY = 2;
-constexpr int kIconSize = 3;
+constexpr int kNoteIconX = 48;  // quarter-note icon, right of the rec dot
+constexpr int kStatusMetaX = 56;
+constexpr int kIconY = 0;
+constexpr int kIconSize = 5;
 constexpr int kProgressY = 7;  // thin blank row between status and content
 
-// Beat meter: one filled dot per playing quarter (it brightens while the step
-// sits inside that quarter), the other three hollow, anchored to the right edge.
-constexpr int kBeatCount = 4;
-constexpr int kBeatDotSize = 3;
-constexpr int kBeatGap = 2;
-constexpr int kBeatX0 =
-    DisplaySh1106::kWidth - (kBeatCount * (kBeatDotSize + kBeatGap) - kBeatGap);
+// Beat circle: a 7x7 dial with four quarter sectors placed just left of the
+// BPM value. While a pattern is running (`beat >= 0`) the sector of the current
+// quarter is filled; otherwise only the 1px outline is drawn (hollow dial).
+constexpr int kBeatDialSize = 7;   // 7x7 px, centre (3,3)
+constexpr int kBeatRadius = 3;     // max |dx|/|dy| from the centre
+constexpr int kBeatDialY = 0;      // top-left y of the dial (same row as meta)
+constexpr int kBeatGap = 2;        // px between the dial and the BPM text
 
 // QUICK screen caption line: names the columns of the focused row so it is
 // always clear which parameter each cell edits (fits inside 132px width).
@@ -53,33 +53,64 @@ constexpr int kCaptionRowH = 8;
 constexpr int kRangeBarY = 7;  // one pixel above the next row
 
 void draw_play_icon(DisplaySh1106& d) {
-    // Right-pointing triangle.
-    d.fill_rect(kPlayIconX + 0, kIconY + 0, 1, kIconSize, true);
-    d.fill_rect(kPlayIconX + 1, kIconY + 1, 1, 1, true);
+    // Right-pointing triangle (classic play symbol): full height on the left,
+    // one pixel apex on the right.
+    for (int dx = 0; dx < kIconSize; ++dx) {
+        const int h = kIconSize - dx;  // 5,4,3,2,1
+        d.fill_rect(kPlayIconX + dx, kIconY + (kIconSize - h) / 2, 1, h, true);
+    }
 }
 
 void draw_rec_icon(DisplaySh1106& d) {
-    // Filled dot.
-    d.fill_rect(kRecIconX, kIconY, kIconSize, kIconSize, true);
+    // Filled circle (classic REC dot): every pixel within the disc radius.
+    const int cx = kRecIconX + kIconSize / 2;
+    const int cy = kIconY + kIconSize / 2;
+    const int r = kIconSize / 2;
+    for (int dy = -r; dy <= r; ++dy) {
+        for (int dx = -r; dx <= r; ++dx) {
+            if (dx * dx + dy * dy <= r * r) {
+                d.set_pixel(cx + dx, cy + dy, true);
+            }
+        }
+    }
 }
 
 void draw_note_icon(DisplaySh1106& d) {
-    // Quarter-note: vertical stem, flag, filled head.
-    d.fill_rect(kNoteIconX, kIconY + 1, 1, 4, true);              // stem
-    d.fill_rect(kNoteIconX + 1, kIconY + 1, 1, 1, true);          // flag
-    d.fill_rect(kNoteIconX - 1, kIconY + 1, 2, 2, true);          // head
+    // Quarter-note: vertical stem, flag, filled head (6 px tall).
+    d.fill_rect(kNoteIconX + 2, kIconY, 1, 6, true);          // stem
+    d.fill_rect(kNoteIconX + 3, kIconY, 2, 1, true);          // flag
+    d.fill_rect(kNoteIconX, kIconY + 3, 3, 3, true);          // head
 }
 
-void draw_beat_meter(DisplaySh1106& d, int beat) {
-    for (int b = 0; b < kBeatCount; ++b) {
-        const int x = kBeatX0 + b * (kBeatDotSize + kBeatGap);
-        const bool on = (b == beat);
-        if (on) {
-            d.fill_rect(x, kIconY, kBeatDotSize, kBeatDotSize, true);
-        } else {
-            // Hollow square: outer 3x3 lit, centre cleared.
-            d.fill_rect(x, kIconY, kBeatDotSize, kBeatDotSize, true);
-            d.fill_rect(x + 1, kIconY + 1, kBeatDotSize - 2, kBeatDotSize - 2, false);
+// Clockwise sectors from the dial centre: 0 top / 1 right / 2 bottom / 3 left.
+// A pixel belongs to the sector of the dominant axis (ties resolve clockwise).
+int beat_sector(int dx, int dy) {
+    const int ax = dx < 0 ? -dx : dx;
+    const int ay = dy < 0 ? -dy : dy;
+    if (ax >= ay) {
+        return dx >= 0 ? 1 : 3;
+    }
+    return dy >= 0 ? 2 : 0;
+}
+
+void draw_beat_dial(DisplaySh1106& d, int x, int beat) {
+    const int cx = x + kBeatRadius;
+    const int cy = kBeatDialY + kBeatRadius;
+    for (int dy = -kBeatRadius; dy <= kBeatRadius; ++dy) {
+        for (int dx = -kBeatRadius; dx <= kBeatRadius; ++dx) {
+            // Disc mask: pixels within the radius circle (plus diagonal fill).
+            const bool inside = dx * dx + dy * dy <= kBeatRadius * kBeatRadius + 2;
+            if (!inside) {
+                continue;
+            }
+            // 1px outline: any disc pixel with a missing 4-neighbour.
+            const bool on_ring = (dx == -kBeatRadius || dx == kBeatRadius || dy == -kBeatRadius ||
+                                  dy == kBeatRadius);
+            if (on_ring) {
+                d.set_pixel(cx + dx, cy + dy, true);
+            } else if (beat >= 0 && beat_sector(dx, dy) == beat) {
+                d.set_pixel(cx + dx, cy + dy, true);
+            }
         }
     }
 }
@@ -93,7 +124,28 @@ const char* screen_prefix(ScreenMode m) {
     return "?";
 }
 
+const char* midi_note_glyph(uint8_t midi) {
+    static const char* kGlyphNames[12] = {"C", "C#", "D", "D#", "E", "F",
+                                          "F#", "G", "G#", "A", "A#", "B"};
+    return kGlyphNames[midi % 12];
+}
+
+int midi_note_octave(uint8_t midi) {
+    return static_cast<int>(midi / 12) - 1;
+}
+
 void seg_value_text(const Segment& s, char* out, int cap) {
+    if (s.type == SegmentType::Range) {
+        // "C1-C4": span string from the live min/max accessors.
+        const int32_t lo = s.get_min ? s.get_min() : 0;
+        const int32_t hi = s.get_max ? s.get_max() : 0;
+        snprintf(out, cap, "%s%d-%s%d",
+                 midi_note_glyph(static_cast<uint8_t>(lo)),
+                 midi_note_octave(static_cast<uint8_t>(lo)),
+                 midi_note_glyph(static_cast<uint8_t>(hi)),
+                 midi_note_octave(static_cast<uint8_t>(hi)));
+        return;
+    }
     const int v = static_cast<int>(s.get());
     if (s.label_fn) {
         const char* txt = s.label_fn(v);
@@ -107,16 +159,6 @@ void seg_value_text(const Segment& s, char* out, int cap) {
     } else {
         snprintf(out, cap, "%d", v);
     }
-}
-
-const char* midi_note_glyph(uint8_t midi) {
-    static const char* kGlyphNames[12] = {"C", "C#", "D", "D#", "E", "F",
-                                          "F#", "G", "G#", "A", "A#", "B"};
-    return kGlyphNames[midi % 12];
-}
-
-int midi_note_octave(uint8_t midi) {
-    return static_cast<int>(midi / 12) - 1;
 }
 
 // "C3", or in RandomNote the pressed key -> generated note ("C3>F#4").
@@ -188,7 +230,19 @@ void draw_quick_cell(DisplaySh1106& d, int col, int y, const char* text, bool in
     if (inverted) {
         // The highlight sits one pixel above the text row so the letters look
         // vertically centered inside the fill; the text itself never moves.
-        d.fill_rect(x, y - 1, kCellW, kRowH, true);
+        // The fill widens past the fixed 32px cell to cover the whole printed
+        // text: range cells like "F#2-D#4" (8 glyphs = 48px) and long caption
+        // labels overflow the fixed column, and their tail glyphs must stay
+        // inside the inverted band to remain visible.
+        const int text_w = static_cast<int>(std::strlen(text)) * DisplaySh1106::kTextAdvance;
+        int w = kCellW;
+        if (text_w + kCellPad > w) {
+            w = text_w + kCellPad;
+        }
+        if (x + w > DisplaySh1106::kWidth) {
+            w = DisplaySh1106::kWidth - x;
+        }
+        d.fill_rect(x, y - 1, w, kRowH, true);
         d.draw_text_px(text, x + kCellPad, y, false);
     } else {
         d.draw_text(text, x + kCellPad, y);
@@ -202,8 +256,9 @@ void draw_quick_cell(DisplaySh1106& d, int col, int y, const char* text, bool in
     }
 }
 
-// NoteRange overview strip: a 1..2 px band under the row spanning the active
-// min..max across the display. Focused rows get a heavier underline.
+// NoteRange overview strip (DETAIL / MAIN items): a thin band under the row
+// spanning the active min..max across the display. Focused rows get a heavier
+// underline. The QUICK Range cell draws the same strip under the row label.
 void draw_range_band(DisplaySh1106& d, const MenuItem& it, int y, bool focused) {
     if (!it.get_min || !it.get_max) {
         return;
@@ -227,6 +282,29 @@ void draw_range_band(DisplaySh1106& d, const MenuItem& it, int y, bool focused) 
     }
     const int band_y = y + kRangeBarY;
     d.fill_rect(x, band_y, w, focused ? 2 : 1, true);
+}
+
+void draw_seg_range_band(DisplaySh1106& d, const Segment& s, int y, bool focused) {
+    if (!s.get_min || !s.get_max) {
+        return;
+    }
+    const int32_t lo = s.get_min();
+    const int32_t hi = s.get_max();
+    const int32_t span = (kNoteRangeMax - kNoteRangeMin);
+    int x = (span <= 0) ? 0
+                        : (static_cast<int>(lo) - kNoteRangeMin) * DisplaySh1106::kWidth / span;
+    int w = (span <= 0) ? DisplaySh1106::kWidth
+                        : (static_cast<int>(hi) - kNoteRangeMin) * DisplaySh1106::kWidth / span - x;
+    if (w < 1) {
+        w = 1;
+    }
+    if (x + w > DisplaySh1106::kWidth) {
+        w = DisplaySh1106::kWidth - x;
+    }
+    if (w <= 0) {
+        return;
+    }
+    d.fill_rect(x, y + 7, w, focused ? 2 : 1, true);
 }
 
 }  // namespace
@@ -278,24 +356,71 @@ void draw_test_screen(const AppState& state, DisplaySh1106& d) {
 void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     display_->clear();
 
-    // Left segment: mode name (ends ~30 px, before the icons at x=36).
-    display_->draw_text(screen_prefix(state.runtime.screen_mode), 0, kStatusY);
-
-    // Middle segment: octave/bpm/step, starts right of the icon gutter.
-    char meta[kMaxCols + 1];
-    if (state.runtime.mode == PlayMode::RandomNote) {
-        // RandomNote is not a pattern; drop the step readout to leave room for
-        // the two-note readout on the right (pressed key > generated note).
-        snprintf(meta, sizeof(meta), "O%d %d",
-                 static_cast<int>(state.runtime.base_octave),
-                 static_cast<int>(state.active_pattern().timing.bpm));
-    } else {
-        snprintf(meta, sizeof(meta), "O%d %d S%d",
-                 static_cast<int>(state.runtime.base_octave),
-                 static_cast<int>(state.active_pattern().timing.bpm),
-                 static_cast<int>(state.runtime.current_step));
+    // Left segment: the screen prefix. On the QUICK screen the word "Quick" is
+    // replaced by the active play mode (Keyboard / RandomNote) — the header of
+    // the screen doubles as the mode switch. When the header zone is focused the
+    // text is inverted, same as a selected cell.
+    const char* header = screen_prefix(state.runtime.screen_mode);
+    if (state.runtime.screen_mode == ScreenMode::Quick) {
+        header = (state.runtime.mode == PlayMode::RandomNote) ? "RND" : "KB";
     }
-    display_->draw_text(meta, kStatusMetaX, kStatusY);
+    const bool hdr_focus = engine.header_focus();
+    if (hdr_focus) {
+        const int w = static_cast<int>(std::strlen(header)) * DisplaySh1106::kTextAdvance + kCellPad;
+        display_->fill_rect(0, kStatusY, w, kRowH, true);
+        display_->draw_text_px(header, kCellPad, kStatusY, false);
+    } else {
+        display_->draw_text(header, 0, kStatusY);
+    }
+
+    // Middle segment: octave, then the beat dial left of the BPM value.
+    // RandomNote has no pattern step, so only octave + BPM are shown.
+    char oct_txt[kMaxCols + 1];
+    snprintf(oct_txt, sizeof(oct_txt), "O%d", static_cast<int>(state.runtime.base_octave));
+    display_->draw_text(oct_txt, kStatusMetaX, kStatusY);
+
+    const int dial_x =
+        kStatusMetaX + static_cast<int>(std::strlen(oct_txt)) * DisplaySh1106::kTextAdvance;
+    // Beat dial: hollow (outline only) when not playing, one filled
+    // quarter-sector matching the running quarter while it plays.
+    if (state.runtime.playing) {
+        draw_beat_dial(*display_, dial_x, static_cast<int>(state.runtime.beat));
+    } else {
+        draw_beat_dial(*display_, dial_x, -1);
+    }
+
+    char bpm_txt[kMaxCols + 1];
+    snprintf(bpm_txt, sizeof(bpm_txt), "%d", static_cast<int>(state.active_pattern().timing.bpm));
+    const int bpm_x = dial_x + kBeatDialSize + kBeatGap;
+    display_->draw_text(bpm_txt, bpm_x, kStatusY);
+
+    // Meta right edge for the live-note readout: everything drawn this frame
+    // between the octave/dial/BPM (and step in KB modes) and the screen edge.
+    int meta_right = bpm_x + static_cast<int>(std::strlen(bpm_txt)) * DisplaySh1106::kTextAdvance;
+    if (state.runtime.mode != PlayMode::RandomNote) {
+        char step_txt[8];
+        snprintf(step_txt, sizeof(step_txt), "S%d", static_cast<int>(state.runtime.current_step));
+        const int step_x = bpm_x + static_cast<int>(std::strlen(bpm_txt)) * DisplaySh1106::kTextAdvance;
+        if (step_x + 2 * DisplaySh1106::kTextAdvance <= DisplaySh1106::kWidth) {
+            display_->draw_text(step_txt, step_x, kStatusY);
+            meta_right = step_x + static_cast<int>(std::strlen(step_txt)) * DisplaySh1106::kTextAdvance;
+        }
+    }
+
+    // Live-note readout in the status line, right after the meta block: in
+    // RandomNote it shows the pressed key -> generated note ("C3>F#4"), in KB
+    // just the last note ("C3"). Skipped when it would run past the screen edge.
+    {
+        char note_txt[12] {};
+        format_note_txt(state, note_txt, sizeof(note_txt));
+        const int nlen = static_cast<int>(std::strlen(note_txt));
+        if (nlen > 0) {
+            const int note_x = meta_right + 1;
+            if (note_x + nlen * DisplaySh1106::kTextAdvance <= DisplaySh1106::kWidth) {
+                display_->draw_text(note_txt, note_x, kStatusY);
+            }
+        }
+    }
 
     char status[kMaxCols + 1];
 
@@ -308,15 +433,6 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
         draw_rec_icon(*display_);
     }
     draw_note_icon(*display_);
-
-    // Pattern beat meter: filled dot = current quarter, others hollow.
-    if (state.runtime.playing && state.active_pattern().length > 0) {
-        const int beat = static_cast<int>(state.runtime.current_step) * kBeatCount /
-                         static_cast<int>(state.active_pattern().length);
-        draw_beat_meter(*display_, std::min(beat, kBeatCount - 1));
-    } else {
-        draw_beat_meter(*display_, -1);
-    }
 
     // Playback progress line in the thin row under the status bar.
     if (state.runtime.playing && state.active_pattern().length > 0) {
@@ -345,29 +461,33 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     const MenuFrame& f = engine.current();
 
     if (engine.is_rows()) {
-        // Caption line for the focused row: names each edit cell so it is clear
-        // which parameter is being changed. Labels are truncated to the cell
-        // width (5 glyphs at 6 px) so the whole line stays inside 132 px.
-        const int cap_max = kCellW / DisplaySh1106::kTextAdvance;
-        if (f.cursor >= 0 && f.cursor < f.row_count) {
+        // Caption line for the focused row: names each edit cell exactly above
+        // its grid column (inverted style, pinned to the top of the list), so it
+        // stays on screen while the cursor moves to lower rows. The header (mode
+        // switch) has no cells, so it gets the full-width summary style instead.
+        const bool hdr_focus = engine.header_focus();
+        if (!hdr_focus && f.cursor >= 0 && f.cursor < f.row_count) {
             const QuickRow& prow = f.rows[f.cursor];
-            for (int si = 0; si < prow.seg_count && si < 3; ++si) {
-                const char* lbl = prow.segments[si].label ? prow.segments[si].label : "PRM";
-                char cap_lbl[8];
-                const int n = static_cast<int>(strlen(lbl)) > cap_max ? cap_max
-                                                                      : static_cast<int>(strlen(lbl));
-                std::memcpy(cap_lbl, lbl, static_cast<std::size_t>(n));
-                cap_lbl[n] = '\0';
-                display_->draw_text(cap_lbl, kColX[si] + kCellPad, kCaptionY);
+            if (prow.seg_count > 0) {
+                for (int si = 0; si < prow.seg_count && si < 3; ++si) {
+                    const char* lbl = prow.segments[si].label ? prow.segments[si].label : "PRM";
+                    draw_quick_cell(*display_, si, kCaptionY, lbl, true, false);
+                }
+            } else if (prow.label != nullptr) {
+                // Summary-only row: full-width inverted line, same style as the row.
+                display_->fill_rect(0, kCaptionY - 1, DisplaySh1106::kWidth,
+                                    kCaptionRowH, true);
+                display_->draw_text_px(prow.label, 0, kCaptionY, false);
             }
         }
+
         for (int i = 0; i < 6; ++i) {
             const int idx = f.offset + i;
             if (idx < 0 || idx >= f.row_count) {
                 break;
             }
             const QuickRow& row = f.rows[idx];
-            const bool focused = (idx == f.cursor);
+            const bool focused = (idx == f.cursor) && !hdr_focus;
             const int y = kCaptionY + kCaptionRowH + i * kRowH;
 
             if (row.seg_count == 0 && row.summary_fn) {
@@ -393,23 +513,8 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
                 const bool inverted = focused && (si == f.seg);
                 const bool edited = inverted && engine.quick_edited();
                 draw_quick_cell(*display_, si, y, cell, inverted, edited);
-            }
-
-            // Live-pressed note: shown right of the MODE cell in the Quick list
-            // (the Mode row). It disappears as soon as the key is released.
-            if (row.seg_count > 0 && std::strcmp(row.label, "Mode") == 0) {
-                char note_txt[12] {};
-                format_note_txt(state, note_txt, sizeof(note_txt));
-                if (note_txt[0] != '\0') {
-                    const int len = static_cast<int>(std::strlen(note_txt));
-                    const int nx = kColX[0] + kCellW + kCellPad;
-                    if (nx + len * DisplaySh1106::kTextAdvance <= DisplaySh1106::kWidth) {
-                        display_->draw_text(note_txt, nx, y);
-                    } else {
-                        display_->draw_text(note_txt,
-                                            DisplaySh1106::kWidth - len * DisplaySh1106::kTextAdvance,
-                                            y);
-                    }
+                if (s.type == SegmentType::Range) {
+                    draw_seg_range_band(*display_, s, y, focused);
                 }
             }
 

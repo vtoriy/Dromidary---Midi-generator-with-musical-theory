@@ -212,6 +212,7 @@ struct ClickSettings {
     uint16_t debounce_ms {12};    // single-click bounce filter (func keys)
     uint16_t double_ms {300};     // double-click window (DETAIL/MAIN reset)
     uint16_t long_ms {800};       // long-press threshold (joystick)
+    uint32_t idle_ms {10000};     // idle before screensaver animation (ms)
 };
 
 struct Pattern {
@@ -232,6 +233,7 @@ struct RuntimeState {
     bool playing {false};
     bool recording {false};
     uint8_t current_step {0};
+    uint8_t beat {0};             // 0..3 running quarter of the transport beat
     uint8_t base_octave {2};      // recognised octave of the note keys
     bool live_mute {false};       // Rest held during playback
     uint8_t last_note {0};        // last/live note shown in the status bar
@@ -301,6 +303,7 @@ enum class SegmentType : uint8_t {
     Radial,       // click to edit, then joystick direction -> zone
     Toggle,       // click confirms an immediate 0/1 flip (no edit mode)
     Param,        // click -> DETAIL submenu
+    Range,        // min..max note span: up/down = max, left/right = centre
 };
 
 struct Segment {
@@ -314,6 +317,13 @@ struct Segment {
     int child_count {0};
     bool direct {false};   // left/right edits immediately (no click-first)
     std::function<const char*(int32_t)> label_fn;  // dynamic cell label (overrides labels)
+
+    // Range segments: two independent bounds with live get/set. get/set stay
+    // nullptr for Range; the renderer formats the span from these accessors.
+    IntGetter get_min;
+    IntSetter set_min;
+    IntGetter get_max;
+    IntSetter set_max;
 };
 
 constexpr int kMaxSegsPerRow = 3;

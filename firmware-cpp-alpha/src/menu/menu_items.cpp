@@ -74,7 +74,6 @@ const char* const kSnapLabels[3] = {"Up", "Dn", "Mute"};
 const SnapMode kSnapIds[3] = {SnapMode::SnapUp, SnapMode::SnapDown, SnapMode::Mute};
 
 const char* const kOnOffLabels[2] = {"Off", "On"};
-const char* const kModeLabels[2] = {"KB", "RND"};
 const char* const kRateModeLabels[2] = {"Note", "Free"};
 const RateMode kRateModeIds[2] = {RateMode::Note, RateMode::Ms};
 
@@ -149,7 +148,7 @@ MenuItem option_idx_io(const char* label, IntGetter get, IntSetter set,
 }
 
 MenuItem int_slider_io(const char* label, IntGetter get, IntSetter set,
-                       int32_t min_v, int32_t max_v) {
+                       int32_t min_v, int32_t max_v, int32_t step = 1) {
     MenuItem m;
     m.type = MenuItemType::IntSlider;
     m.label = label;
@@ -157,7 +156,7 @@ MenuItem int_slider_io(const char* label, IntGetter get, IntSetter set,
     m.set_i = std::move(set);
     m.min_v = min_v;
     m.max_v = max_v;
-    m.step = 1;
+    m.step = step;
     return m;
 }
 
@@ -332,7 +331,7 @@ ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
         [&p]() { return static_cast<int32_t>(p.random.shape); },
         [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v % 4); },
         kShapeLabels, 4));
-    emit(c, note_range_item("Note Range",
+    emit(c, note_range_item("NT_RNG",
         [&p]() { return static_cast<int32_t>(p.random.note_min); },
         [&p](int32_t v) {
             int32_t lo = std::clamp(static_cast<int32_t>(v), kNoteRangeMin, kNoteRangeMax);
@@ -551,17 +550,6 @@ void build_quick_rows(AppState* st, MenuContent& c) {
         r.segments[r.seg_count++] = s;
     };
 
-    // ---- Mode row: MIDI keyboard <-> random note (click confirms the flip) ----
-    {
-        QuickRow& r = add_row("Mode");
-        add_seg(r, Segment {SegmentType::Toggle, "Mode",
-            [st]() { return st->runtime.mode == PlayMode::RandomNote ? 1 : 0; },
-            [st](int32_t v) {
-                st->runtime.mode = (v != 0) ? PlayMode::RandomNote : PlayMode::MidiKeyboard;
-            },
-            kModeLabels, 2, nullptr, 0, false});
-    }
-
     // ---- Key row ----
     {
         QuickRow& r = add_row("Key");
@@ -639,6 +627,33 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             nullptr, 2001, nullptr, 0, false, std::move(rate_label_fn)});
 
         const ItemRef ref = emit_arp_block(c, p);
+        r.submenu = ref.items;
+        r.submenu_count = ref.count;
+    }
+
+    // ---- Random range row (RandomNote only): quick access to the note span;
+    // click on the row name opens the full Randomize DETAIL (same items as
+    // FULL). The note range shows as a "C1-C4" cell plus a band under the row. --
+    if (mode == PlayMode::RandomNote) {
+        QuickRow& r = add_row("RND");
+        add_seg(r, Segment {SegmentType::Range, "NT_RNG",
+            nullptr, nullptr, nullptr, 0, nullptr, 0, false});
+        r.segments[r.seg_count - 1].get_min = [&p]() { return static_cast<int32_t>(p.random.note_min); };
+        r.segments[r.seg_count - 1].set_min = [&p](int32_t v) {
+            int32_t lo = std::clamp(static_cast<int32_t>(v), kNoteRangeMin, kNoteRangeMax);
+            const int32_t hi = static_cast<int32_t>(p.random.note_max);
+            if (lo > hi) { lo = hi; }
+            p.random.note_min = static_cast<uint8_t>(lo);
+        };
+        r.segments[r.seg_count - 1].get_max = [&p]() { return static_cast<int32_t>(p.random.note_max); };
+        r.segments[r.seg_count - 1].set_max = [&p](int32_t v) {
+            int32_t hi = std::clamp(static_cast<int32_t>(v), kNoteRangeMin, kNoteRangeMax);
+            const int32_t lo = static_cast<int32_t>(p.random.note_min);
+            if (hi < lo) { hi = lo; }
+            p.random.note_max = static_cast<uint8_t>(hi);
+        };
+
+        const ItemRef ref = emit_randomize_block(c, p);
         r.submenu = ref.items;
         r.submenu_count = ref.count;
     }
@@ -815,6 +830,10 @@ void build_full_menu(AppState* st, MenuContent& c) {
     emit(c, int_slider_io("Click Lng",
         [st]() { return static_cast<int32_t>(st->runtime.click.long_ms); },
         [st](int32_t v) { st->runtime.click.long_ms = static_cast<uint16_t>(v); }, 200, 2000));
+    emit(c, int_slider_io("Idle Anim",
+        [st]() { return static_cast<int32_t>(st->runtime.click.idle_ms); },
+        [st](int32_t v) { st->runtime.click.idle_ms = static_cast<uint32_t>(v); },
+        10000, 120000, 5000));
     emit(c, action_item("Test", [st]() { st->runtime.test_mode = true; }));
     sys_count = static_cast<int>(c.item_count - sys_start);
 

@@ -51,6 +51,7 @@ void AppLoop::init() {
     gpio_init(BoardPins::kLed);
     gpio_set_dir(BoardPins::kLed, GPIO_OUT);
     gpio_put(BoardPins::kLed, false);
+    last_input_ms_ = to_ms_since_boot(get_absolute_time());
 }
 
 bool AppLoop::is_pressed(uint32_t raw, uint8_t bit) const {
@@ -249,6 +250,11 @@ void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
                 note_held_[i] = true;
                 if (!state_.runtime.test_mode) {
                     mode_.note_on(i, button_to_note(i), now_ms);
+                    // A RandomNote key press starts the loop without the Play
+                    // button, so reflect that transport in the status dial.
+                    if (state_.runtime.mode == PlayMode::RandomNote && mode_.random_loop_running()) {
+                        state_.runtime.playing = true;
+                    }
                 }
                 ui_dirty_ = true;
             }
@@ -460,6 +466,76 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
     }
 }
 
+void AppLoop::update_idle_screensaver(uint32_t now_ms) {
+    auto& runtime = state_.runtime;
+    if (runtime.test_mode) {
+        return;
+    }
+    const uint32_t idle = runtime.click.idle_ms;
+    if (idle == 0) {
+        return;  // screensaver disabled
+    }
+    const bool anim = (runtime.screen_mode == ScreenMode::Animation);
+    if (!anim) {
+        if (now_ms - last_input_ms_ >= idle) {
+            screensaver_origin_ = runtime.screen_mode;
+            runtime.screen_mode = ScreenMode::Animation;
+            screensaver_active_ = true;
+            menu_.rebuild();
+            ui_dirty_ = true;
+        }
+        return;
+    }
+    // In the auto-entered animation, any fresh press wakes back to the
+    // interactive screen. Manual animation (chosen via long-press) is left.
+    if (screensaver_active_ && now_ms - last_input_ms_ < idle) {
+        screensaver_active_ = false;
+        runtime.screen_mode = screensaver_origin_;
+        menu_.rebuild();
+        ui_dirty_ = true;
+    }
+}
+
+void AppLoop::update_beat(uint32_t now_ms) {
+    // Transport metronome independent of the (not yet running) pattern
+    // sequencer: while playing, advance runtime.beat (0..3) every quarter at
+    // the current tempo so the status dial always rotates during a live arp or
+    // the random loop. When stopped or in slave-sync mode the marker freezes
+    // (Slave follows the host's F8 ticks through update_midi_clock directly).
+    const TimingCfg& t = state_.active_pattern().timing;
+    if (t.clock == ClockSync::Slave) {
+        state_.runtime.beat = 0;
+        beat_tick_ms_ = 0;
+        return;
+    }
+    if (!state_.runtime.playing) {
+        state_.runtime.beat = 0;
+        beat_tick_ms_ = 0;
+        return;
+    }
+    const int bpm = static_cast<int>(t.bpm);
+    if (bpm <= 0) {
+        return;
+    }
+    // One quarter note lasts 60000/bpm ms; the dial shows four quarters, so
+    // one sector advances every 60000/bpm ms (a full bar = four quarters).
+    const uint32_t quarter_ms = static_cast<uint32_t>(60000 / bpm);
+    if (beat_tick_ms_ == 0) {
+        beat_tick_ms_ = now_ms;
+        state_.runtime.beat = 0;
+        return;
+    }
+    const uint32_t elapsed = now_ms - beat_tick_ms_;
+    if (quarter_ms > 0 && elapsed >= quarter_ms) {
+        // Step through as many quarters as fit into the elapsed time so a
+        // long stall between repaints does not freeze the dial position.
+        state_.runtime.beat =
+            static_cast<uint8_t>((state_.runtime.beat + elapsed / quarter_ms) % 4);
+        beat_tick_ms_ = now_ms - (elapsed % quarter_ms);
+        ui_dirty_ = true;
+    }
+}
+
 [[noreturn]] void AppLoop::run() {
     while (true) {
         tud_task();
@@ -471,6 +547,26 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
         process_notes(raw, now_ms);
         process_joystick(raw, now_ms);
         update_midi_clock(now_ms);
+
+        // Rotate the status-dial metronome after MIDI Clock sync has had a
+        // chance to set runtime.playing (slave Start/Stop), so stop/play never
+        // leave the dial stuck on a filled sector.
+        update_beat(now_ms);
+
+        // Activity detection runs BEFORE the screensaver check so a fresh press
+        // during the auto-entered animation wakes it back to the interactive
+        // screen within this very loop, instead of one frame later.
+        constexpr uint32_t kUnusedMask = 0x00300000u;  // raw bits 20,21
+        const uint32_t raw_masked = raw & ~kUnusedMask;
+        const bool joy_motion = joy_.direction() != Direction::Center;
+        const bool activity = (raw_masked != (last_raw_ & ~kUnusedMask)) ||
+                              joy_motion || joy_.button();
+        if (activity) {
+            last_input_ms_ = now_ms;
+        }
+
+        // Idle screensaver: Animate after kScreensaverIdleMs without input.
+        update_idle_screensaver(now_ms);
 
         // Raw note-key image for the test screen: bit i = key i pressed.
         state_.runtime.note_bits = static_cast<uint16_t>(~raw & 0xFFFFu);
@@ -489,7 +585,8 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
         const ClickSettings& c = state_.runtime.click;
         if (c.debounce_ms != saved_click_.debounce_ms ||
             c.double_ms != saved_click_.double_ms ||
-            c.long_ms != saved_click_.long_ms) {
+            c.long_ms != saved_click_.long_ms ||
+            c.idle_ms != saved_click_.idle_ms) {
             if ((now_ms - last_persist_edit_ms_) >= kPersistSaveDelayMs) {
                 persist_save_click(c);
                 saved_click_ = c;
@@ -501,13 +598,9 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
 
         // Activity LED: lit while any physical input differs from the previous
         // sampled 24-bit image (any pressed or released key/function button).
-        // The non-connected chip3 bits 4-5 float, so they are masked out to avoid the
-        // LED strobing from mere electrical noise.
-        constexpr uint32_t kUnusedMask = 0x00300000u;  // raw bits 20,21
-        const uint32_t raw_masked = raw & ~kUnusedMask;
-        const bool joy_motion = joy_.direction() != Direction::Center;
-        const bool activity = (raw_masked != (last_raw_ & ~kUnusedMask)) ||
-                              joy_motion || joy_.button();
+        // The non-connected chip3 bits 4-5 float, so they are masked out to avoid
+        // the LED strobing from mere electrical noise. (activity already holds
+        // the current-frame comparison computed before the screensaver check.)
         gpio_put(BoardPins::kLed, activity);
         last_raw_ = raw;
 

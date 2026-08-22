@@ -17,6 +17,10 @@ struct MenuFrame {
     int cursor {0};
     int offset {0};
     int seg {0};
+    // QUICK root: the header (mode switch KB/RND) is itself a selectable zone,
+    // reached from row 0's left column (seg == -1) by tilting up. While it is
+    // focused, a click toggles the play mode instead of editing a cell.
+    bool header_focus {false};
 };
 
 // Navigation state machine for QUICK / DETAIL / MAIN / ANIM screens.
@@ -50,6 +54,8 @@ void tilt(Direction dir, bool shift);
     // True in QUICK when the focused cell is being edited and its live value
     // differs from the last accepted value (renderer draws a marker).
     bool quick_edited() const;
+    // True when the QUICK header zone (the mode switch KB/RND) has the focus.
+    bool header_focus() const;
 
     const MenuFrame& current() const;
     const QuickRow* parent_row() const;
@@ -82,6 +88,8 @@ private:
     bool range_edit_ {false};    // 2D range editing active on a NoteRange item
     int32_t range_snap_min_ {12};
     int32_t range_snap_max_ {119};
+    int32_t cell_range_min_ {12};  // snapped min of the focused Range cell
+    int32_t cell_range_max_ {119}; // snapped max of the focused Range cell
 };
 
 }  // namespace drom

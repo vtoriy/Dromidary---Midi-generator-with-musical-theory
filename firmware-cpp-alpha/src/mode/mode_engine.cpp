@@ -524,14 +524,26 @@ void ModeEngine::advance_random(uint32_t now_ms) {
 
 uint8_t ModeEngine::pick_random_note(uint8_t anchor) {
     const Pattern& p = state_->active_pattern();
+    const RandomCfg& rnd = p.random;
     const KeyFilterCfg& kf = p.key_filter;
     const bool use_kf = kf.enabled && kf.scale != ScaleId::Off &&
                         static_cast<uint8_t>(kf.scale) < static_cast<uint8_t>(ScaleId::kCount);
+    // Draw inside the user-configured random range, clamped to a sane band
+    // that stays within MIDI. When the range is empty or inverted, fall back
+    // to the anchor-based band so the mode always produces a note.
+    const int lo = std::min(static_cast<int>(rnd.note_min), static_cast<int>(rnd.note_max));
+    const int hi = std::max(static_cast<int>(rnd.note_min), static_cast<int>(rnd.note_max));
+    const bool usable = hi >= lo;
     // A 3.5-octave band around the pressed key: center sits one octave below
     // the anchor so the generated note mostly stays in a pleasant range.
     const int center = static_cast<int>(anchor) - 12;
     for (int attempt = 0; attempt < 16; ++attempt) {
-        const int midi = center + static_cast<int>(rng_.range(48));
+        int midi;
+        if (usable) {
+            midi = lo + static_cast<int>(rng_.range(static_cast<uint32_t>(hi - lo + 1)));
+        } else {
+            midi = center + static_cast<int>(rng_.range(48));
+        }
         if (midi < 0 || midi > 127) {
             continue;
         }

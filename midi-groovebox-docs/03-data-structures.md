@@ -158,6 +158,7 @@ struct ClickSettings {
     uint16_t debounce_ms {12};  // фильтр дребезга функц. кнопок (3..60)
     uint16_t double_ms {300};   // окно двойного клика (100..1000)
     uint16_t long_ms {800};     // порог long-press джойстика (200..2000)
+    uint32_t idle_ms   {10000}; // таймер скринсейвера (10..120 с, шаг 5 с)
 };
 ```
 
@@ -166,10 +167,13 @@ struct ClickSettings {
 
 ```
 magic   = 0x44524F4D ("DROM")
-version = 1
+version = 3
 click   = ClickSettings
 crc     = CRC32(click)
 ```
+
+Смена `version` аннулирует прежние блоки: при несовпадении версии
+`persist_load_click` возвращает умолчания (idle_ms = 10000).
 
 Загрузка при старте (`persist_load_click`): если magic/version не совпадают —
 остаются дефолты из структуры. Запись (`persist_save_click`) — через

@@ -45,6 +45,7 @@ void MenuEngine::push_rows(const QuickRow* rows, int count) {
     f.cursor = 0;
     f.offset = 0;
     f.seg = 0;
+    f.header_focus = false;
     stack_[depth_++] = f;
     snapshot_cell();
 }
@@ -74,6 +75,11 @@ void MenuEngine::pop() {
 
 const MenuFrame& MenuEngine::current() const {
     return stack_[depth_ - 1];
+}
+
+bool MenuEngine::header_focus() const {
+    return depth_ > 0 && stack_[depth_ - 1].is_rows &&
+           stack_[depth_ - 1].header_focus;
 }
 
 const QuickRow* MenuEngine::parent_row() const {
@@ -113,6 +119,9 @@ const Segment* MenuEngine::current_segment() const {
         return nullptr;
     }
     const MenuFrame& f = current();
+    if (f.header_focus) {
+        return nullptr;
+    }
     if (f.cursor < 0 || f.cursor >= f.row_count) {
         return nullptr;
     }
@@ -164,12 +173,29 @@ void MenuEngine::move_row(int delta) {
     if (f.row_count == 0) {
         return;
     }
+    // Header zone (mode switch): only the up/down move is meaningful — Up is a
+    // no-op (already at the top), Down returns to row 0's left column.
+    if (f.header_focus) {
+        if (delta > 0) {
+            f.header_focus = false;
+            f.cursor = 0;
+            f.seg = -1;
+            snapshot_cell();
+        }
+        return;
+    }
     // Keep the same column when moving vertically: moving down from the 2nd
     // segment of a row lands on the 2nd segment of the row below (clamped to
-    // the target row's segment count).
+    // the target row's segment count). Reaching row 0's left column (seg == -1)
+    // and tilting up moves the focus onto the header zone instead.
     const int old_seg = f.seg;
     const int max_i = f.row_count - 1;
     const int new_cur = std::clamp(f.cursor + delta, 0, max_i);
+    if (delta < 0 && f.cursor == 0 && f.seg == -1) {
+        f.header_focus = true;
+        f.cursor = 0;
+        return;
+    }
     if (new_cur < f.offset) {
         f.offset = new_cur;
     } else if (new_cur >= f.offset + 5) {
@@ -187,8 +213,15 @@ void MenuEngine::move_seg(int delta) {
     if (!is_rows()) {
         return;
     }
-    const Segment* seg = current_segment();
     MenuFrame& f = stack_[depth_ - 1];
+    // Tilting sideways while the header (mode switch) is focused drops back to
+    // row 0 and continues from its left column.
+    if (f.header_focus) {
+        f.header_focus = false;
+        f.cursor = 0;
+        f.seg = -1;
+    }
+    const Segment* seg = current_segment();
     const QuickRow& row = f.rows[f.cursor];
     // -1 is the row caption column; moving left from cell 0 lands on it when
     // the row carries a DETAIL submenu (seg = nullptr triggers the push).
@@ -250,7 +283,15 @@ void MenuEngine::snapshot_range() {
 
 void MenuEngine::snapshot_cell() {
     const Segment* seg = current_segment();
-    if (seg != nullptr && seg->get) {
+    if (seg == nullptr) {
+        return;
+    }
+    if (seg->type == SegmentType::Range) {
+        if (seg->get_min) { cell_range_min_ = seg->get_min(); }
+        if (seg->get_max) { cell_range_max_ = seg->get_max(); }
+        return;
+    }
+    if (seg->get) {
         cell_accepted_ = seg->get();
     }
 }
@@ -272,6 +313,13 @@ void MenuEngine::press_short() {
     if (is_rows()) {
         const Segment* seg = current_segment();
         const MenuFrame& f = current();
+        // Header zone: a click toggles the play mode (KB <-> RND).
+        if (f.header_focus) {
+            st_->runtime.mode = (st_->runtime.mode == PlayMode::RandomNote)
+                                    ? PlayMode::MidiKeyboard
+                                    : PlayMode::RandomNote;
+            return;
+        }
         if (edit_mode_) {
             edit_mode_ = false;
             edit_snapshot_ = 0;
@@ -301,7 +349,8 @@ void MenuEngine::press_short() {
             }
             return;
         }
-        if (seg->type == SegmentType::Linear || seg->type == SegmentType::Radial) {
+        if (seg->type == SegmentType::Linear || seg->type == SegmentType::Radial ||
+            seg->type == SegmentType::Range) {
             enter_edit(*seg);
         }
         return;
@@ -354,6 +403,13 @@ void MenuEngine::reset_value() {
         // mode. Works both during editing (undo the live tweak) and after the
         // cell was confirmed.
         const Segment* seg = current_segment();
+        if (seg != nullptr && seg->type == SegmentType::Range) {
+            if (seg->set_min) { seg->set_min(cell_range_min_); }
+            if (seg->set_max) { seg->set_max(cell_range_max_); }
+            edit_mode_ = false;
+            edit_snapshot_ = 0;
+            return;
+        }
         if (seg != nullptr && seg->set) {
             seg->set(cell_accepted_);
         }
@@ -394,7 +450,9 @@ void MenuEngine::item_adjust(int delta) {
             break;
         }
         case MenuItemType::IntSlider: {
-            const int32_t next = std::clamp(item->get_i() + delta, item->min_v, item->max_v);
+            const int32_t step = item->step > 0 ? item->step : 1;
+            const int32_t next = std::clamp(item->get_i() + delta * step,
+                                            item->min_v, item->max_v);
             if (item->set_i) { item->set_i(next); }
             break;
         }
@@ -444,7 +502,23 @@ void MenuEngine::tilt(Direction dir, bool shift) {
     if (is_rows()) {
         const Segment* seg = current_segment();
         if (edit_mode_) {
-            if (seg != nullptr && seg->type == SegmentType::Linear
+            if (seg != nullptr && seg->type == SegmentType::Range) {
+                // Note-range segment: up/down = max bound, left/right = centre
+                // shift (width kept), mirroring the DETAIL NoteRange control.
+                int32_t lo = seg->get_min ? seg->get_min() : 0;
+                int32_t hi = seg->get_max ? seg->get_max() : 0;
+                if (dir == Direction::Up) {
+                    hi = std::min(static_cast<int32_t>(kNoteRangeMax), hi + 1);
+                } else if (dir == Direction::Down) {
+                    hi = std::max(lo, hi - 1);
+                } else if (dir == Direction::Right) {
+                    if (hi < kNoteRangeMax) { ++lo; ++hi; }
+                } else if (dir == Direction::Left) {
+                    if (lo > kNoteRangeMin) { --lo; --hi; }
+                }
+                if (seg->set_min) { seg->set_min(lo); }
+                if (seg->set_max) { seg->set_max(hi); }
+            } else if (seg != nullptr && seg->type == SegmentType::Linear
                 && (dir == Direction::Left || dir == Direction::Right)) {
                 const int delta = (dir == Direction::Right) ? 1 : -1;
                 if (shift) {
@@ -485,16 +559,15 @@ void MenuEngine::tilt(Direction dir, bool shift) {
     if (item == nullptr) {
         return;
     }
-    // Active 2D range editing: up/down widens/narrows the span, left/right
-    // shifts the centre. The cursor does not move while a range is edited.
+    // Active 2D range editing: up/down changes only the MAX (upper) bound,
+    // left/right shifts the whole span (centre moves, width is kept). Cursor
+    // does not move while a range is edited.
     if (range_edit_ && item->type == MenuItemType::NoteRange && item->set_min && item->set_max) {
         int32_t lo = item->get_min ? item->get_min() : 0;
         int32_t hi = item->get_max ? item->get_max() : 0;
         if (dir == Direction::Up) {
-            lo = std::max(static_cast<int32_t>(kNoteRangeMin), lo - 1);
             hi = std::min(static_cast<int32_t>(kNoteRangeMax), hi + 1);
         } else if (dir == Direction::Down) {
-            lo = std::min(hi, lo + 1);
             hi = std::max(lo, hi - 1);
         } else if (dir == Direction::Right) {
             if (hi < kNoteRangeMax) { ++lo; ++hi; }
