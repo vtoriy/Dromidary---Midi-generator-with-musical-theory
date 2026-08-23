@@ -193,11 +193,18 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                 mode_.random_loop_stop();
             } else {
                 runtime.playing = true;
-                // Anchor on the current keyboard octave (C of that octave).
+                // Anchor on the root of the current tonality, in the keyboard
+                // octave (REP maps it into the PITCH range by pitch class).
                 const uint8_t anchor = static_cast<uint8_t>(
-                    (runtime.base_octave + kMidiOctaveOffset) * 12);
+                    (runtime.base_octave + kMidiOctaveOffset) * 12 +
+                    state_.active_pattern().key_filter.root_note);
                 mode_.random_loop_start(anchor, now_ms);
             }
+        } else if (runtime.mode == PlayMode::RandomPattern) {
+            // GEN: Play starts/stops the loop without regenerating; a key
+            // press is what creates a new pattern.
+            mode_.gen_toggle_play();
+            runtime.playing = mode_.gen_running();
         } else if (runtime.mode == PlayMode::MidiKeyboard || runtime.mode == PlayMode::MidiFilter) {
             // Play as a transport stop for the live arpeggio: one press silences
             // everywhere the arp/keyboard is sounding, keeping a binary `playing`
@@ -393,24 +400,37 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
             if (!master_started_) {
                 midi_.realtime(0xFA);  // Start
                 master_started_ = true;
+                clock_last_now_ms_ = now_ms;
+                clock_acc_64th_ = 0;
             }
             const int bpm = static_cast<int>(t.bpm);
             if (bpm > 0) {
-                // One quarter note lasts 60000/bpm ms; a tick is 1/24 of it.
-                const uint32_t tick_ms = static_cast<uint32_t>(60000 / bpm / kClockPpqn);
-                if (clock_tick_ms_ == 0 || now_ms - clock_tick_ms_ >= tick_ms) {
+                // Drift-free tick clock: accumulate REAL elapsed time (in 1/64
+                // ms units) and emit an F8 every step = 160000/bpm units
+                // (= 60000/bpm/24 ms). Scheduling latency of the main loop no
+                // longer shifts the tempo, because every frame contributes its
+                // exact delta and the accumulator carries the remainder.
+                const uint32_t elapsed = now_ms - clock_last_now_ms_;
+                clock_last_now_ms_ = now_ms;
+                clock_acc_64th_ += elapsed << 6;
+                uint32_t step = 160000u / static_cast<uint32_t>(bpm);
+                if (step == 0) { step = 1; }
+                // Runaway guard: after a stall emit at most a few catch-up
+                // ticks instead of a burst, then resync.
+                if (clock_acc_64th_ > step * 8u) {
+                    clock_acc_64th_ = 0;
+                }
+                while (clock_acc_64th_ >= step) {
+                    clock_acc_64th_ -= step;
                     midi_.realtime(0xF8);
-                    clock_tick_ms_ = now_ms;
                 }
             }
         } else {
             if (master_started_) {
                 midi_.realtime(0xFC);  // Stop
                 master_started_ = false;
-                clock_tick_ms_ = 0;
-            } else {
-                clock_tick_ms_ = 0;
             }
+            clock_acc_64th_ = 0;
         }
         return;
     }
@@ -482,6 +502,8 @@ void AppLoop::update_idle_screensaver(uint32_t now_ms, bool fresh_input) {
             screensaver_origin_ = runtime.screen_mode;
             runtime.screen_mode = ScreenMode::Animation;
             screensaver_active_ = true;
+            // Every entry starts from a fresh random stage of the scene.
+            renderer_.restart_animation(now_ms ^ (last_input_ms_ * 31u + 0x9E37u));
             menu_.rebuild();
             ui_dirty_ = true;
         }
@@ -619,6 +641,7 @@ void AppLoop::update_beat(uint32_t now_ms) {
         if (state_.runtime.mode != last_mode_) {
             mode_.all_notes_off();
             mode_.random_loop_stop();
+            mode_.gen_stop();
             menu_.rebuild();
             last_mode_ = state_.runtime.mode;
             ui_dirty_ = true;
@@ -636,6 +659,7 @@ void AppLoop::update_beat(uint32_t now_ms) {
                 screensaver_active_ = true;
                 last_input_ms_ = now_ms;
                 suppress_wake_until_ = now_ms + kManualAnimWakeGuardMs;
+                renderer_.restart_animation(now_ms ^ (last_input_ms_ * 31u + 0x9E37u));
                 menu_.rebuild();
                 ui_dirty_ = true;
             }
@@ -648,6 +672,14 @@ void AppLoop::update_beat(uint32_t now_ms) {
             last_len_triplets_ = state_.active_pattern().random.len_triplets;
             menu_.rebuild();
             ui_dirty_ = true;
+        }
+
+        // Randomize DETAIL -> Regen: re-roll the PTRN slot, keep playing.
+        if (state_.runtime.regen_req) {
+            state_.runtime.regen_req = false;
+            if (state_.runtime.mode == PlayMode::RandomPattern) {
+                mode_.gen_regen_now(now_ms);
+            }
         }
 
         // Keep the Animation screen advancing at 12 FPS even when no input.

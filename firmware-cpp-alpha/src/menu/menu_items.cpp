@@ -366,7 +366,7 @@ ItemRef emit_adsr_block(MenuContent& c, Pattern& p) {
     return wrap_ref(c, start);
 }
 
-ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
+ItemRef emit_randomize_block(MenuContent& c, Pattern& p, AppState* st) {
     const std::size_t start = c.item_count;
     emit(c, int_slider_io("Density",
         [&p]() { return static_cast<int32_t>(p.random.density_or_probability); },
@@ -391,13 +391,22 @@ ItemRef emit_randomize_block(MenuContent& c, Pattern& p) {
             p.random.note_max = static_cast<uint8_t>(hi);
         }));
     emit(c, len_range_item("Len Range", p));
-    // Len Chain: On = the next RND onset lands on the drawn gate's end
+    // Len Chain: On = the next RND onset lands on the drawn length's end
     // (duration-driven, ARP Rate ignored for spacing). Off = steps stay on the
     // ARP Rate grid with the length capped by the step.
     emit(c, option_idx_io("Len Chain",
         [&p]() { return p.random.len_chain ? 1 : 0; },
         [&p](int32_t v) { p.random.len_chain = (v != 0); },
         kOnOffLabels, 2));
+    // Gate as % of the event length: 100 = legato chain, lower = staccato gap.
+    emit(c, int_slider_io("Gate %",
+        [&p]() { return static_cast<int32_t>(p.random.gate_pct); },
+        [&p](int32_t v) {
+            p.random.gate_pct =
+                static_cast<uint8_t>(std::clamp<int32_t>((v + 5) / 10 * 10, 20, 100));
+        }, 20, 100, 10));
+    // PTRN only: re-roll the generated slot keeping the current anchor.
+    emit(c, action_item("Regen", [st]() { st->runtime.regen_req = true; }));
     return wrap_ref(c, start);
 }
 
@@ -683,12 +692,12 @@ void build_quick_rows(AppState* st, MenuContent& c) {
         r.submenu_count = ref.count;
     }
 
-    // ---- Random range row (RandomNote only): quick access to the note span;
-    // click on the row name opens the full Randomize DETAIL (same items as
-    // FULL). The label is "Rand" — "RND" is reserved for the mode indicator in
-    // the status-bar header, and a same-named row under it reads as duplication.
-    if (mode == PlayMode::RandomNote) {
-        QuickRow& r = add_row("Rand");
+    // ---- Rand row: generation params for RND and GEN (RandomPattern) ----
+    // Click on the row name opens the full Randomize DETAIL (same items as
+    // FULL). The label is "Rand" — "RND"/"GEN" are reserved for the mode
+    // indicator in the status-bar header.
+    if (mode == PlayMode::RandomNote || mode == PlayMode::RandomPattern) {
+        QuickRow& r = add_row("RAN");
 
         // Cell 1: pitch range (min..max MIDI note). Short caption labels —
         // three cells must fit the caption line without overlapping.
@@ -753,7 +762,7 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p](int32_t v) { p.random.repeat = static_cast<uint8_t>(std::clamp<int32_t>(v, 0, 9)); },
             nullptr, 10, nullptr, 0, false, std::move(rep_label_fn)});
 
-        const ItemRef ref = emit_randomize_block(c, p);
+        const ItemRef ref = emit_randomize_block(c, p, st);
         r.submenu = ref.items;
         r.submenu_count = ref.count;
     }
@@ -761,7 +770,7 @@ void build_quick_rows(AppState* st, MenuContent& c) {
     // ---- Timing row (default row: swing/hum + quick BPM); click on the name
     // opens the full Timing DETAIL (BPM/Swing/Humanize/Quantize/Legato/Clock) --
     {
-        QuickRow& r = add_row("Time");
+        QuickRow& r = add_row("TIM");
         add_seg(r, Segment {SegmentType::Radial, "Swing",
             [&p]() { return static_cast<int32_t>(swing_zone(p.timing)); },
             [&p](int32_t z) { apply_swing_zone(p.timing, static_cast<int>(z)); },
@@ -782,18 +791,40 @@ void build_quick_rows(AppState* st, MenuContent& c) {
         r.submenu_count = ref.count;
     }
 
-    // ---- ADSR row (informative label, click -> DETAIL) ----
+    // ---- ADR row: quick gate controls + DETAIL (full ADSR block) ----
+    // Cells: On (gate switch), Atk, Dec. Defaults: gate off, 0 ms / 500 ms.
+    // The old summary-only style ("ADR:On" over the row name) is gone — the
+    // caption line now names the cells like every other row.
     {
         QuickRow& r = add_row("ADR");
+        add_seg(r, Segment {SegmentType::Toggle, "On",
+            [&p]() { return p.gate.enabled ? 1 : 0; },
+            [&p](int32_t v) { p.gate.enabled = (v != 0); },
+            kOnOffLabels, 2, nullptr, 0, false});
+
+        add_seg(r, Segment {SegmentType::Linear, "Atk",
+            [&p]() { return static_cast<int32_t>(p.gate.attack_ms); },
+            [&p](int32_t v) {
+                p.gate.attack_ms = static_cast<uint16_t>(std::clamp<int32_t>(v, 0, 500));
+            },
+            nullptr, 501, nullptr, 0, false});
+
+        add_seg(r, Segment {SegmentType::Linear, "Dec",
+            [&p]() { return static_cast<int32_t>(p.gate.decay_ms); },
+            [&p](int32_t v) {
+                p.gate.decay_ms = static_cast<uint16_t>(std::clamp<int32_t>(v, 0, 500));
+            },
+            nullptr, 501, nullptr, 0, false});
+
         const ItemRef ref = emit_adsr_block(c, p);
         r.submenu = ref.items;
         r.submenu_count = ref.count;
-        r.summary_fn = [&p]() { return p.gate.enabled ? "On" : "Off"; };
     }
 
-    // ---- Other row: density + reserved shape (random modes), one row ----
+    // ---- ALL row: density + shape + pattern length (random modes). Clicking
+    // the row name jumps to the FULL menu root (handled in MenuEngine). ----
     if (mode == PlayMode::RandomPattern || mode == PlayMode::RandomNote) {
-        QuickRow& r = add_row("Other");
+        QuickRow& r = add_row("ALL");
         // Density steps in 10% increments: the cell stores the tens index and
         // prints it as percent.
         auto dens_label_fn = [](int32_t v) -> const char* {
@@ -813,6 +844,25 @@ void build_quick_rows(AppState* st, MenuContent& c) {
             [&p]() { return static_cast<int32_t>(p.random.shape); },
             [&p](int32_t v) { p.random.shape = static_cast<uint8_t>(v); },
             kShapeLabels, 4, nullptr, 0, false});
+
+        // Pattern length in doubling steps: 4/8/16/32/64 events.
+        auto pl_label_fn = [](int32_t v) -> const char* {
+            static char buf[4];
+            snprintf(buf, sizeof(buf), "%d", 4 << std::clamp<int32_t>(v, 0, 4));
+            return buf;
+        };
+        add_seg(r, Segment {SegmentType::Linear, "STEP",
+            [&p]() -> int32_t {
+                int32_t len = std::clamp<int32_t>(p.length, 4, 64);
+                int32_t idx = 0;
+                while (len > 4) { len >>= 1; ++idx; }
+                return idx;
+            },
+            [&p](int32_t v) {
+                p.length = static_cast<uint8_t>(
+                    4 << std::clamp<int32_t>(v, 0, 4));
+            },
+            nullptr, 5, nullptr, 0, false, std::move(pl_label_fn)});
     }
 }
 
@@ -914,7 +964,7 @@ void build_full_menu(AppState* st, MenuContent& c) {
 
     // Randomize (density + shape + note range, mirrors the QUICK random rows)
     rnd_start = c.item_count;
-    emit_randomize_block(c, p);
+    emit_randomize_block(c, p, st);
     rnd_count = static_cast<int>(c.item_count - rnd_start);
 
     // MIDI (read-only placeholders)

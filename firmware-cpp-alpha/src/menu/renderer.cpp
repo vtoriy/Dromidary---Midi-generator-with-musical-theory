@@ -15,11 +15,13 @@ constexpr int kRowH = 8;
 constexpr int kContentY = 8;
 constexpr int kMaxCols = 21;  // 132px / 6px per glyph
 
-// QUICK 3-column cell grid: row label on the left, then three fixed columns so
-// the cells of Key/Chord/Arp line up vertically and never shift when a value
-// or the edit marker changes.
-constexpr int kLabelW = 24;
-constexpr int kColX[3] = {26, 62, 98};
+// QUICK 3-column cell grid: row label on the left (3-glyph names keep the
+// gutter at 18px), then three fixed columns so the cells of Key/Chord/Arp line
+// up vertically and never shift when a value or the edit marker changes.
+// col0 starts close to the gutter so a 7-glyph pitch range ("F#2:D#4") clears
+// the LEN column.
+constexpr int kLabelW = 18;
+constexpr int kColX[3] = {20, 62, 98};
 constexpr int kCellW = 32;
 constexpr int kCellPad = 2;
 
@@ -152,13 +154,15 @@ void seg_value_text(const Segment& s, char* out, int cap) {
                 return;
             }
         }
+        // Colon between the notes ("F#2:D#4") — compact, yet readable; the
+        // cell still clears the neighbouring LEN column.
         if (lo == hi) {
             snprintf(out, cap, "%s%d",
                      midi_note_glyph(static_cast<uint8_t>(lo)),
                      midi_note_octave(static_cast<uint8_t>(lo)));
             return;
         }
-        snprintf(out, cap, "%s%d-%s%d",
+        snprintf(out, cap, "%s%d:%s%d",
                  midi_note_glyph(static_cast<uint8_t>(lo)),
                  midi_note_octave(static_cast<uint8_t>(lo)),
                  midi_note_glyph(static_cast<uint8_t>(hi)),
@@ -403,7 +407,9 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     // text is inverted, same as a selected cell.
     const char* header = screen_prefix(state.runtime.screen_mode);
     if (state.runtime.screen_mode == ScreenMode::Quick) {
-        header = (state.runtime.mode == PlayMode::RandomNote) ? "RND" : "KB";
+        header = (state.runtime.mode == PlayMode::RandomNote)   ? "RND"
+                 : (state.runtime.mode == PlayMode::RandomPattern) ? "PTRN"
+                                                                   : "KB";
     }
     const bool hdr_focus = engine.header_focus();
     if (hdr_focus) {
@@ -475,15 +481,9 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
     }
     draw_note_icon(*display_);
 
-    // Playback progress line in the thin row under the status bar.
-    if (state.runtime.playing && state.active_pattern().length > 0) {
-        const int w = DisplaySh1106::kWidth *
-                      static_cast<int>(state.runtime.current_step) /
-                      static_cast<int>(state.active_pattern().length);
-        if (w > 0) {
-            display_->fill_rect(0, kProgressY, w, 1, true);
-        }
-    }
+    // NOTE: the thin progress line under the status bar is intentionally not
+    // drawn: there is no real step-grid playback yet (GEN/PTRN chains events by
+    // duration), so a bar would mislead more than inform.
 
     if (state.runtime.test_mode) {
         draw_test_screen(state, *display_);

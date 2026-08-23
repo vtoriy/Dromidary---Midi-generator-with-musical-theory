@@ -84,9 +84,9 @@ struct TimingCfg {
 
 struct GateCfg {
     bool enabled {false};
-    uint16_t attack_ms {0};        // задержка Note On (0..2000)
-    uint16_t decay_ms {0};         // зарезервировано (нет velocity-выхода)
-    uint8_t sustain_pct {100};     // зарезервировано (нет velocity-выхода)
+    uint16_t attack_ms {0};        // задержка Note On (0..500 в QUICK/DETAIL)
+    uint16_t decay_ms {500};       // Decay (мс, дефолт 500; на MIDI не влияет — резерв)
+    uint8_t sustain_pct {100};     // зарезервировано
     uint16_t release_ms {0};       // продление Note Off (0..2000)
     bool sync_quantize {false};    // true = "quantize" sync (gate_cfg.sync)
 };
@@ -94,7 +94,8 @@ struct GateCfg {
 
 > `attack_ms`/`release_ms` активны при `gate.enabled == true` и применяются в
 > live-выводе через очередь отложенных событий `ModeEngine::pending_`
-> (см. `02-midi-chain.md`, этапы 5–8). `decay_ms`/`sustain_pct` на MIDI не влияют.
+> (см. `02-midi-chain.md`, этапы 5–8). `decay_ms`/`sustain_pct` на MIDI не влияют
+> (резерв; ячейки Atk/Dec строки ADR и слайдеры DETAIL правят их напрямую).
 
 struct TransposeCfg {
     int8_t semitones {0};              // -12..+12

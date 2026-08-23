@@ -1,6 +1,7 @@
 #include "menu_engine.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 #include "../engine/midi_chain.hpp"
 
@@ -313,11 +314,19 @@ void MenuEngine::press_short() {
     if (is_rows()) {
         const Segment* seg = current_segment();
         const MenuFrame& f = current();
-        // Header zone: a click toggles the play mode (KB <-> RND).
+        // Header zone: a click cycles the play mode KB -> RND -> PTRN -> KB.
         if (f.header_focus) {
-            st_->runtime.mode = (st_->runtime.mode == PlayMode::RandomNote)
-                                    ? PlayMode::MidiKeyboard
-                                    : PlayMode::RandomNote;
+            switch (st_->runtime.mode) {
+                case PlayMode::MidiKeyboard:
+                    st_->runtime.mode = PlayMode::RandomNote;
+                    break;
+                case PlayMode::RandomNote:
+                    st_->runtime.mode = PlayMode::RandomPattern;
+                    break;
+                default:
+                    st_->runtime.mode = PlayMode::MidiKeyboard;
+                    break;
+            }
             return;
         }
         if (edit_mode_) {
@@ -329,6 +338,13 @@ void MenuEngine::press_short() {
         if (seg == nullptr) {
             if (f.cursor >= 0 && f.cursor < f.row_count) {
                 const QuickRow& row = f.rows[f.cursor];
+                // The ALL row doubles as a shortcut into the FULL menu root.
+                if (std::strcmp(row.label, "ALL") == 0 &&
+                    st_->runtime.screen_mode == ScreenMode::Quick) {
+                    st_->runtime.screen_mode = ScreenMode::Full;
+                    rebuild();
+                    return;
+                }
                 if (row.submenu_count > 0) {
                     push_items(row.submenu, row.submenu_count);
                 }

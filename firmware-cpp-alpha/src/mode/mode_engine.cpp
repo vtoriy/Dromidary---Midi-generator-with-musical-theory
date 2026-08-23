@@ -1,5 +1,7 @@
 #include "mode_engine.hpp"
 
+#include <algorithm>
+
 #include "../engine/key_filter.hpp"
 #include "../engine/midi_chain.hpp"
 
@@ -273,8 +275,8 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         return;
     }
     const PlayMode mode = state_->runtime.mode;
-    if (mode == PlayMode::Pattern || mode == PlayMode::RandomPattern) {
-        return;  // note keys ignored
+    if (mode == PlayMode::Pattern) {
+        return;  // note keys ignored (no playback/recording yet)
     }
 
     const bool latch = latch_enabled();
@@ -311,6 +313,30 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         if (random_loop_) {
             advance_random(now_ms);
         }
+        return;
+    }
+
+    // RandomPattern (GEN): a key press regenerates the slot from this anchor
+    // and starts the loop; re-pressing the SAME key toggles generation off.
+    if (mode == PlayMode::RandomPattern) {
+        if (latch) {
+            latched_[chip_idx] = true;
+        }
+        if (gen_playing_ && state_ != nullptr &&
+            state_->runtime.last_input_note == raw_note) {
+            gen_stop();
+            state_->runtime.playing = false;
+            state_->runtime.last_input_note = 0;
+            state_->runtime.last_note = 0;
+            state_->runtime.show_note = false;
+            ui_repaint_ = true;
+            return;
+        }
+        if (state_ != nullptr) {
+            state_->runtime.last_input_note = raw_note;
+            state_->runtime.show_note = true;
+        }
+        gen_start(raw_note, now_ms);
         return;
     }
 
@@ -456,6 +482,13 @@ void ModeEngine::tick(uint32_t now_ms) {
     } else if (random_loop_) {
         random_loop_stop();
     }
+    // RandomPattern (GEN): duration-chained playback of the generated slot.
+    if (gen_playing_ && state_ != nullptr &&
+        state_->runtime.mode == PlayMode::RandomPattern) {
+        gen_advance(now_ms);
+    } else if (gen_playing_) {
+        gen_stop();
+    }
 }
 
 void ModeEngine::on_arp_config_changed(uint32_t now_ms) {
@@ -491,6 +524,180 @@ void ModeEngine::random_loop_start(uint8_t anchor, uint32_t now_ms) {
     (void)advance_random(now_ms);
 }
 
+// -- RandomPattern (GEN): generate once into the slot, loop as a chain -------
+
+void ModeEngine::gen_regenerate(uint8_t anchor) {
+    if (state_ == nullptr) {
+        return;
+    }
+    gen_anchor_ = anchor;
+    Pattern& p = state_->active_pattern();
+    const RandomCfg& rnd = p.random;
+    const bool tr = rnd.len_triplets;
+    int vis_lo = note_len_div_pos(rnd.len_min_idx, tr);
+    int vis_hi = note_len_div_pos(rnd.len_max_idx, tr);
+    if (vis_lo > vis_hi) {
+        const int t = vis_lo;
+        vis_lo = vis_hi;
+        vis_hi = t;
+    }
+    const int vis_max = note_len_div_count(tr) - 1;
+    if (vis_hi > vis_max) { vis_hi = vis_max; }
+    if (vis_lo > vis_hi) { vis_lo = vis_hi; }
+
+    const uint16_t rep_pct = static_cast<uint16_t>(rnd.repeat) * 10u;
+    const uint8_t events =
+        static_cast<uint8_t>(std::min<int>(p.length, kStepCountMax));
+    uint8_t prev_note = 0;
+    for (uint8_t i = 0; i < events; ++i) {
+        Step& s = p.steps[i];
+        const bool rest = rng_.range(100) < rnd.density_or_probability;
+        uint8_t note = 0;
+        if (!rest) {
+            if (prev_note != 0 && rep_pct > 0 && rng_.range(100) < rep_pct) {
+                note = prev_note;  // REP: repeat the previous event's tone
+            } else {
+                note = pick_random_note(anchor);
+            }
+            prev_note = note;
+        }
+        s.notes[0] = note;
+        s.note_count = rest ? 0 : 1;
+        s.active = !rest;
+        s.tie = false;
+        const int vis =
+            vis_lo + static_cast<int>(rng_.range(static_cast<uint32_t>(vis_hi - vis_lo + 1)));
+        s.length_steps = note_len_div_real(vis, tr);  // store the division index
+    }
+}
+
+void ModeEngine::gen_start(uint8_t anchor_note, uint32_t now_ms) {
+    if (state_ == nullptr || midi_ == nullptr) {
+        return;
+    }
+    gen_stop();
+    random_loop_stop();
+    gen_regenerate(anchor_note);
+    gen_playing_ = true;
+    gen_pos_ = 0;
+    gen_last_note_ = 0;
+    gen_next_ms_ = now_ms;
+    state_->runtime.playing = true;
+    state_->runtime.current_step = 0;
+    ui_repaint_ = true;
+}
+
+void ModeEngine::gen_toggle_play() {
+    if (state_ == nullptr) {
+        return;
+    }
+    if (gen_playing_) {
+        gen_stop();
+        state_->runtime.playing = false;
+    } else {
+        gen_playing_ = true;
+        gen_pos_ = 0;
+        gen_last_note_ = 0;
+        gen_next_ms_ = 0;  // fire on the next tick
+        state_->runtime.playing = true;
+        state_->runtime.current_step = 0;
+        ui_repaint_ = true;
+    }
+}
+
+void ModeEngine::gen_stop() {
+    if (!gen_playing_) {
+        return;
+    }
+    gen_playing_ = false;
+    clear_pending();
+    if (gen_last_note_ != 0 && midi_) {
+        midi_->note_off(gen_last_note_);
+    }
+    gen_last_note_ = 0;
+    ui_repaint_ = true;
+}
+
+void ModeEngine::gen_regen_now(uint32_t now_ms) {
+    if (!gen_playing_ || state_ == nullptr) {
+        return;
+    }
+    gen_regenerate(gen_anchor_);
+    gen_pos_ = 0;
+    gen_last_note_ = 0;
+    clear_pending();
+    gen_next_ms_ = now_ms;
+    state_->runtime.current_step = 0;
+    ui_repaint_ = true;
+}
+
+void ModeEngine::gen_advance(uint32_t now_ms) {
+    if (midi_ == nullptr || state_ == nullptr) {
+        return;
+    }
+    if (now_ms < gen_next_ms_) {
+        return;
+    }
+    Pattern& p = state_->active_pattern();
+    const uint8_t events =
+        static_cast<uint8_t>(std::min<int>(p.length, kStepCountMax));
+    if (events == 0) {
+        gen_stop();
+        return;
+    }
+    Step& s = p.steps[gen_pos_];
+    const uint32_t dur = note_len_ms(s.length_steps, p.timing.bpm);
+    const uint32_t attack = gate_attack_ms();
+    const uint32_t release = gate_release_ms();
+    // Gate as a share of the event length (Gate %): 100 keeps the legato
+    // chain, lower values leave an articulation gap before the next onset.
+    uint32_t gate = dur * p.random.gate_pct / 100u;
+    if (gate < 1) { gate = 1; }
+
+    if (s.active && s.note_count > 0 && s.notes[0] != 0) {
+        schedule_pending(now_ms + attack, s.notes[0], true);
+        schedule_pending(now_ms + gate + release, s.notes[0], false);
+        gen_last_note_ = s.notes[0];
+        state_->runtime.last_note = s.notes[0];
+        state_->runtime.show_note = true;
+    } else {
+        state_->runtime.show_note = false;
+    }
+    state_->runtime.current_step = gen_pos_;
+    gen_pos_ = static_cast<uint8_t>((gen_pos_ + 1) % events);
+    gen_next_ms_ = now_ms + dur;
+    ui_repaint_ = true;
+}
+
+uint8_t ModeEngine::anchor_in_range() const {
+    const Pattern& p = state_->active_pattern();
+    const int lo = std::min(static_cast<int>(p.random.note_min),
+                            static_cast<int>(p.random.note_max));
+    const int hi = std::max(static_cast<int>(p.random.note_min),
+                            static_cast<int>(p.random.note_max));
+    const int pc = random_anchor_ % 12;
+    // Nearest in-range occurrence of the anchor's pitch class. A span narrower
+    // than 12 semitones may not contain it at all — fall back to clamping.
+    int best = -1;
+    int best_dist = 1 << 30;
+    for (int n = lo; n <= hi; ++n) {
+        if (n % 12 != pc) {
+            continue;
+        }
+        const int dist = (n > random_anchor_) ? n - random_anchor_
+                                              : random_anchor_ - n;
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = n;
+        }
+    }
+    if (best >= 0) {
+        return static_cast<uint8_t>(best);
+    }
+    return static_cast<uint8_t>(std::clamp<int>(random_anchor_, lo, hi));
+}
+
+
 void ModeEngine::advance_random(uint32_t now_ms) {
     if (!random_loop_ || midi_ == nullptr || state_ == nullptr) {
         return;
@@ -510,9 +717,13 @@ void ModeEngine::advance_random(uint32_t now_ms) {
     // a fresh tone. The anchor goes out as-is: it is the player's explicit
     // input, so range and scale filters do not clip it.
     uint8_t picked;
+    bool rep_hit = false;  // this step echoes the KEY note (the anchor)
     const uint16_t rep_pct = static_cast<uint16_t>(rnd.repeat) * 10u;
     if (rep_pct > 0 && rng_.range(100) < rep_pct) {
-        picked = random_anchor_;
+        // The KEY note is the main one: keep its pitch class, snap the octave
+        // into the PITCH range when the raw anchor lies outside it.
+        picked = anchor_in_range();
+        rep_hit = true;
     } else {
         picked = pick_random_note(random_anchor_);
     }
@@ -534,8 +745,10 @@ void ModeEngine::advance_random(uint32_t now_ms) {
 
     if (!rnd.len_chain) {
         // Grid mode (Len Chain Off): steps stay on the ARP Rate grid and the
-        // drawn length is capped by the step; identical redraws ring through.
-        if (picked == last_random_note_ && last_random_note_ != 0) {
+        // drawn length is capped by the step. Identical redraws ring through —
+        // EXCEPT a REP hit: the KEY note must be re-articulated, otherwise the
+        // repeat would be inaudible while the anchor keeps sounding.
+        if (picked == last_random_note_ && last_random_note_ != 0 && !rep_hit) {
             next_random_ms_ = now_ms + interval;
             return;
         }
@@ -557,19 +770,19 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         return;
     }
 
-    // Chained mode (Len Chain On): every step is an articulated event — off,
-    // on, timed off — and the next onset lands exactly on this gate's end, so
-    // a "64" note is followed immediately by whatever length comes next. The
-    // ARP Rate does not space RND notes here (BPM still scales divisions).
-    // Identical tones retrigger too: REP repeats become rhythmic pulses.
+    // Chained mode (Len Chain On): every step is an articulated event — on,
+    // then a timed off at gate% of the drawn length — and the next onset lands
+    // exactly on this length's end, so a "64" note is followed immediately by
+    // whatever length comes next. The ARP Rate does not space RND notes here
+    // (BPM still scales divisions). Identical tones retrigger too: REP repeats
+    // become rhythmic pulses.
     if (boundary < 20) { boundary = 20; }  // USB MIDI sanity floor
-    if (last_random_note_ != 0 && midi_) {
-        schedule_pending(now_ms + release, last_random_note_, false);
-    }
+    uint32_t gate = boundary * rnd.gate_pct / 100u;
+    if (gate < 1) { gate = 1; }
     last_random_note_ = picked;
     if (midi_) {
         schedule_pending(now_ms + attack, picked, true);
-        schedule_pending(now_ms + boundary + release, picked, false);
+        schedule_pending(now_ms + gate + release, picked, false);
     }
     if (state_ != nullptr) {
         state_->runtime.last_note = picked;

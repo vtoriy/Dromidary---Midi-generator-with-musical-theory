@@ -14,6 +14,8 @@ public:
     MenuRenderer(DisplaySh1106* display) : display_(display) {}
 
     void render(const AppState& state, const MenuEngine& engine);
+    // Re-seed the screensaver scene (call when entering Animation mode).
+    void restart_animation(uint32_t seed) { animation_.restart(seed); }
 
 private:
     DisplaySh1106* display_;

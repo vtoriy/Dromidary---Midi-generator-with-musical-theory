@@ -76,7 +76,11 @@ private:
 
     // MIDI Clock sync state.
     // Master: 24 ppqn ticker against runtime.playing.
-    uint32_t clock_tick_ms_ {0};      // wall-clock anchor for the next master tick
+    // Master clock accumulator: elapsed time in 1/64 ms units; an F8 goes out
+    // every 160000/bpm units (= 60000/bpm/24 ms). Elapsed-delta based, so main
+    // loop latency cannot drift the tempo.
+    uint32_t clock_last_now_ms_ {0};
+    uint32_t clock_acc_64th_ {0};
     bool master_started_ {false};     // start/continue already sent for this run
     // Live transport-metronome state: advances runtime.beat (0..3) at quarter
     // tempo while playing, so the status dial rotates without a pattern run.

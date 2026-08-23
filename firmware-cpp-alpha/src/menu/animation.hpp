@@ -13,6 +13,10 @@ namespace drom {
 // sand, with the "dromidary" title. Monochrome 2-colour, 12 FPS.
 class AnimationRenderer {
 public:
+    // Re-seed and rebuild the scene so every entry into the Animation screen
+    // starts from a different stage (star field, sand, dune phase, comet wait).
+    void restart(uint32_t seed);
+
     void render(DisplaySh1106& display);
 
 private:

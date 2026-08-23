@@ -189,7 +189,7 @@ struct TimingCfg {
 struct GateCfg {
     bool enabled {false};
     uint16_t attack_ms {0};
-    uint16_t decay_ms {0};
+    uint16_t decay_ms {500};
     uint8_t sustain_pct {100};
     uint16_t release_ms {0};
     bool sync_quantize {false};   // true = "quantize" sync (gate_cfg.sync)
@@ -211,6 +211,8 @@ struct RandomCfg {
     bool len_chain {true};                // true = chained lengths (next onset follows the
                                           // gate end); false = ARP Rate grid, length capped
     bool len_triplets {false};            // include triplet divisions in the LEN list
+    uint8_t gate_pct {100};               // gate as % of the event length (20..100, step 10);
+                                          // 100 = legato chain, less = articulation gap
 };
 
 // Persistent input-click timing settings (survive device reboot).
@@ -249,6 +251,7 @@ struct RuntimeState {
     uint16_t note_bits {0};       // latest raw chip1+2 image: bit i = raw bit i, 1 = pressed
     ClickSettings click {};
     bool test_mode {false};       // FULL menu "Test" screen active
+    bool regen_req {false};       // Randomize -> Regen: re-roll the PTRN slot
 };
 
 struct NoteSet {

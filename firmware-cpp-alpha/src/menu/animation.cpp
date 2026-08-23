@@ -29,6 +29,16 @@ void draw_px(DisplaySh1106& d, int x, int y) {
 
 }  // namespace
 
+void AnimationRenderer::restart(uint32_t seed) {
+    rng_ = SimpleRng(seed ^ 0x1D2C3A4Eu);
+    // Random starting frame: the dune drift/breathing and star twinkle phases
+    // derive from frame_, so this alone already changes the opening picture.
+    frame_ = static_cast<int>(rng_.range(600));
+    init_state();
+    // First comet may arrive soon instead of always after 40 frames.
+    next_comet_ = static_cast<int>(rng_.range(40));
+}
+
 void AnimationRenderer::init_state() {
     for (auto& s : stars_) {
         s.x = static_cast<uint8_t>(rng_.range(static_cast<uint32_t>(kWidth)));

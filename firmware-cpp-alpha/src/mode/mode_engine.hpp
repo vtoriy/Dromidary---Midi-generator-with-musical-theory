@@ -36,6 +36,16 @@ public:
     void random_loop_stop();
     bool random_loop_running() const { return random_loop_; }
 
+    // RandomPattern (GEN): a random sequence is generated once into the active
+    // pattern slot and looped as a duration chain — every event lasts its drawn
+    // LEN division and the next onset lands on the previous gate end. A key
+    // press regenerates (same key toggles off), Play starts/stops the loop.
+    void gen_start(uint8_t anchor_note, uint32_t now_ms);  // regenerate + play
+    void gen_toggle_play();                                // Play without regen
+    void gen_regen_now(uint32_t now_ms);                   // re-roll, keep playing
+    void gen_stop();
+    bool gen_running() const { return gen_playing_; }
+
     // Polled by the main loop: true when the live note label should be
     // repainted although no physical input happened (arp step advance,
     // random transitions). Take-and-clear semantics.
@@ -56,6 +66,10 @@ private:
     void release_chip(uint8_t chip_idx, uint32_t now_ms);
     void check_config(uint32_t now_ms);
     uint8_t pick_random_note(uint8_t anchor);
+    // REP helper: the KEY note mapped into the PITCH range by pitch class —
+    // only the note name is kept, the octave snaps to the nearest in-range
+    // occurrence (C0 with range C1-C2 becomes C1).
+    uint8_t anchor_in_range() const;
     // Sync runtime.show_note with any_active_input(); call after note_off etc.
     void refresh_show_note();
 
@@ -111,6 +125,15 @@ private:
     uint8_t random_anchor_ {60};  // GC4
     uint8_t last_random_note_ {0};
     uint32_t next_random_ms_ {0};
+
+    // RandomPattern (GEN) player state.
+    void gen_regenerate(uint8_t anchor);
+    void gen_advance(uint32_t now_ms);
+    bool gen_playing_ {false};
+    uint8_t gen_pos_ {0};          // event index within the slot
+    uint8_t gen_anchor_ {60};
+    uint8_t gen_last_note_ {0};    // sounding event note (for chained offs)
+    uint32_t gen_next_ms_ {0};
 
     // Set whenever the note readout changed outside of input handling.
     bool ui_repaint_ {false};
