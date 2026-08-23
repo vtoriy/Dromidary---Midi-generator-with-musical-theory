@@ -16,30 +16,42 @@ Implemented:
 - Quick (Level 1) panel with click-edit cells, radial zones and Detail submenus
 - Full MAIN menu tree (Pattern, Key/Scale, Chord, Arpeggiator, Timing, Gate/ADSR,
   Transpose, Octave, MIDI)
-- screen modes: QUICK / DETAIL / MAIN / ANIMATION, switch via long-press
+- screen modes: QUICK / DETAIL / MAIN / ANIMATION; long-press cycles
+  QUICK <-> MAIN, the QUICK header click cycles the play mode KB/RND/PTRN
 - key filter (16 scales, snap up/down/mute), chord builder (26 chord types),
   polyphonic arpeggiator (19 styles incl. Chord-trigger, note-division or ms
   rate with triplets, keys×range keyboard-column expansion, scale filtering,
   cycle length, latch)
-- RandomNote mode: continuous random-note loop around a key/Play anchor (toggle
-  off by re-pressing the same note key)
+- RandomNote mode: continuous random-note loop with a PITCH range, a LEN gate-
+  length range (triplets optional), REP anchor-repeat chance and Len Chain
+  (duration-driven timing vs ARP Rate grid)
+- RandomPattern mode: one-shot random pattern generated into the active slot
+  from a key press, looped as a duration chain (rests by Density, pattern
+  length STEP 4..64, Gate % articulation, Regen action)
+- ADR quick row: On/Atk/Dec cells (full ADSR in DETAIL); ALL quick row jumps
+  to the FULL menu root
+- MIDI Clock master/slave over USB (drift-free master accumulator; slave BPM
+  estimated from host F8 stream)
+- screensaver animation with auto-start on idle and manual launch, each entry
+  starting from a randomized scene stage
 - timing FX (swing/humanize/quantize/legato) applied to the live arpeggio,
   Gate/ADSR (attack delays Note On, release extends Note Off) and chord voicing
   Block/Strum/Roll via a delayed-event queue in `ModeEngine`
 - timing quick row (Swing/Quantize + DETAIL) and BPM moved into `TimingCfg`
-  (Quick → Time; FULL → Timing section)
+  (Quick → TIM; FULL → Timing section)
 - joystick tilt auto-repeat with hold-time acceleration (220 ms → ~60 ms, x3
   steps on the fastest tier)
 - USB MIDI note on/off path + function keys duplicated as MIDI CC (20–25, ch. 16)
-- persisted click-timing settings (debounce/double/long) in the last flash sector
+- persisted settings (debounce/double/long/idle) in the last flash sector
 - raw-input **Test** screen (System → Test), exit with Shift + joystick click
 
 Deferred:
 
-- pattern sequencer playback/recording/step-edit
-- Random Pattern / Pattern / MIDI Filter modes
+- Pattern mode playback/recording/step-edit for recorded patterns
+- MIDI Filter mode (needs UART MIDI IN)
 - UART MIDI DIN
-- flash/RAM pattern persistence
+- flash persistence for patterns
+- wiring Shape/Dens into the generation engine
 
 ## What you need to install (to build and flash)
 

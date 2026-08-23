@@ -27,21 +27,23 @@
 | 🎼 | **Key / Scale Quantizer** | 16 ладов; «неправильные» ноты: snap-up, snap-down или mute |
 | 🎹 | **Chord Builder** | 26 типов аккордов (triads, 7th, sus, altered, quartal/quintal, cluster, power) |
 | 🔁 | **Arpeggiator** | 19 стилей (Up/Down, UpDown/DownUp, Up&Dn/Dn&Up, Converge/Diverge/Con&Div, Pinky/Thumb-педали, As Played, Chord Trigger, Random/Random Once/Random Other, Off), rate в нотах (1/64–1/1, включая триоли) или мс (Free); **Distance** = шаг транспонирования (полутоны), **Steps** = доп. транспозиции, **Cycle** = длина цикла, фильтр по тональности, **latch** |
-| 🎵 | **RandomNote** | Непрерывная генерация случайных нот вокруг якоря клавиши/Play, с фильтром в тональность |
+| 🎵 | **RandomNote (RND)** | Непрерывный поток случайных нот: диапазон высоты **PITCH**, диапазон длин **LEN** (1/128…4/1, триоли опционально), **REP** — шанс повтора якорной ноты KEY, **Len Chain** — цепочка длительностей вместо сетки ARP Rate |
+| 🎲 | **RandomPattern (PTRN)** | Однократная генерация случайного паттерна (16–64 событий) от нажатой клавиши и его зацикленное воспроизведение цепочкой длительностей; rest'ы по Density; **Gate %** и **Regen** в меню |
 | 🎚️ | **Полифонический live-арпеджио** | Все зажатые клавиши объединяются в один аккорд → единый арп-цикл |
 | ⬆️ | **Transpose / Octave** | Полутоны и октавы (до Key Filter); базовая октава клавиатуры 1–8 |
-| 🎛️ | **Quick / Detail / Main меню** | Быстрые ячейки, радиальный селектор (8 зон), полное дерево, сброс Rest+клик |
-| ⚙️ | **Persist во flash** | Тайминги кликов (debounce/double/long) сохраняются в последний сектор |
+| 🎛️ | **Quick / Detail / Main меню** | Быстрые ячейки, радиальный селектор (8 зон), полное дерево, сброс Rest+клик; режим KB/RND/PTRN переключается кликом по заголовку |
+| ⚙️ | **Persist во flash** | Тайминги кликов (debounce/double/long) и таймер скринсейвера сохраняются в последний сектор |
 | 🎛️ | **Timing-эффекты** | Swing/humanize/quantize/legato — применяются к live-арпеджио |
-| 🎚️ | **Gate/ADSR** | Attack задерживает Note On, release продлевает Note Off |
+| 🎚️ | **Gate/ADSR** | Attack задерживает Note On, release продлевает Note Off; ячейки On/Atk/Dec прямо в QUICK |
 | 🎸 | **Voicing** | Block / Strum / Roll (с `strum_delay_ms`) для аккордов в live |
+| ⏱️ | **MIDI Clock** | Master (шлёт F8/Start/Stop с точным BPM) и Slave (следует за хостом DAW) |
 | 🔬 | **Экран Test** | Диагностика распиновки кнопок (System → Test), выход Shift+клик |
 | 🎚️ | **CC-дубли** | Функц. кнопки дублируются MIDI CC 20–25 на канале 16 для DAW |
 
-**Не реализовано (отложено):** паттерн-секвенсор (запись/воспроизведение),
-режимы Random Pattern / Pattern / MIDI Filter, UART MIDI DIN, MIDI Clock,
-сохранение паттернов. Timing/ADSR/voicing — реализованы (см. таблицу выше).
-Подробно — [`midi-groovebox-docs/07-roadmap-open-questions.md`](midi-groovebox-docs/07-roadmap-open-questions.md).
+**Не реализовано (отложено):** воспроизведение/запись записанного паттерна
+(режим Pattern), MIDI Filter (нужен UART MIDI IN), UART MIDI DIN, сохранение
+паттернов во flash, подключение Shape/Dens к генерации. Подробно —
+[`midi-groovebox-docs/07-roadmap-open-questions.md`](midi-groovebox-docs/07-roadmap-open-questions.md).
 
 ---
 
@@ -65,15 +67,16 @@ Transpose ──► Key Filter ──► Chord Builder ──► secondary filte
 
 ---
 
-## 🕹️ Режимы (в alpha доступны 2)
+## 🕹️ Режимы (в alpha доступны 3)
 
 | Режим | Как включить | Описание |
 |---|---|---|
 | 🎹 **MIDI-клавиатура (KB)** | по умолчанию | Live-игра: Key Filter → аккорды → полифонический арпеджио |
-| 🎵 **Случайная нота (RND)** | Quick → ячейка **Mode** | Непрерывный поток случайных нот вокруг якоря нажатой клавиши |
+| 🎵 **Случайная нота (RND)** | клик по заголовку QUICK | Непрерывный поток случайных нот: PITCH/LEN/REP + Len Chain |
+| 🎲 **Случайный паттерн (PTRN)** | клик по заголовку QUICK | Клавиша генерирует случайный паттерн и запускает его цикл; Play — старт/стоп |
 
-`Pattern`, `RandomPattern`, `MidiFilter` — зарезервированы (требуют секвенсора и
-MIDI IN). См. [`06-mode-matrix.md`](midi-groovebox-docs/06-mode-matrix.md).
+Клик по заголовку циклит **KB → RND → PTRN → KB**. `Pattern` и `MidiFilter`
+зарезервированы. См. [`06-mode-matrix.md`](midi-groovebox-docs/06-mode-matrix.md).
 
 ---
 
@@ -98,13 +101,17 @@ MIDI IN). См. [`06-mode-matrix.md`](midi-groovebox-docs/06-mode-matrix.md).
 
 ## 🖱️ Управление
 
-- **Нотные клавиши** — игра нот; октава — Oct Up/Dn.
-- **Play** — старт/стоп (в RND — запуск/остановка цикла случайной ноты);
+- **Нотные клавиши** — игра нот (в PTRN — генерация паттерна); октава — Oct Up/Dn.
+- **Play** — старт/стоп; в RND/PTRN — цикл генерации/паттерна.
   **Rest** — live-mute пока зажата; **Rest + клик джойстика** — сброс значения.
+- **Заголовок QUICK** — клик переключает режим KB/RND/PTRN (наклон вверх с любой
+  ячейки первой строки фокусирует заголовок).
 - **Джойстик** — навигация по меню, радиальный селектор (Scale/Chord/Style/Strum),
-  ввод значений (±1), удержание — авто-повтор, Shift+наклон — крайние значения.
-- **Экраны**: Quick (быстрые ячейки) → Full/MAIN (полное меню) → Animation —
-  long-press джойстика на корне.
+  ввод значений, удержание — авто-повтор, Shift+наклон — крайние значения.
+- **Экраны**: long-press джойстика на корне циклит Quick ↔ Full/MAIN;
+  строка **ALL** в случайных режимах тоже открывает FULL-меню.
+- **Анимация** — автозапуск по простою (System → Idle Anim) или вручную
+  (System → Anim), каждый раз со случайной стадии сцены.
 - **Экран Test** — Full → System → Test (диагностика распиновки, выход Shift+клик).
 
 ---
@@ -161,7 +168,7 @@ midi-groovebox-docs/         ← документация (рус.)
 4. [Структуры данных](midi-groovebox-docs/03-data-structures.md) — C++-модель
 5. [Навигация меню](midi-groovebox-docs/04-menu-navigation.md) — Quick/DETAIL/MAIN/Anim
 6. [Распределение ввода](midi-groovebox-docs/05-input-mapping.md) — кнопки, джойстик
-7. [Матрица режимов](midi-groovebox-docs/06-mode-matrix.md) — KB/RND
+7. [Матрица режимов](midi-groovebox-docs/06-mode-matrix.md) — KB/RND/PTRN
 8. [Роадмап](midi-groovebox-docs/07-roadmap-open-questions.md) — что дальше
 
 ---
