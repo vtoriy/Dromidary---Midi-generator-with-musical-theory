@@ -249,11 +249,16 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
         // hears is quantised into the active slot: KB/Filter keys, RandomNote
         // output (and PTRN live playback all record while Rec is held up).
         if (!runtime.test_mode) {
-            if (runtime.recording &&
-                (runtime.mode == PlayMode::Pattern ||
-                 runtime.mode == PlayMode::RandomNote ||
-                 runtime.mode == PlayMode::MidiKeyboard ||
-                 runtime.mode == PlayMode::MidiFilter)) {
+            if (runtime.screen_mode == ScreenMode::Edit) {
+                // In the editor Rec ONLY arms step entry — it must not start
+                // the slot transport, otherwise the playhead runs away instead
+                // of letting the user place notes one step at a time.
+                mode_.capture_transport_stop();
+            } else if (runtime.recording &&
+                       (runtime.mode == PlayMode::Pattern ||
+                        runtime.mode == PlayMode::RandomNote ||
+                        runtime.mode == PlayMode::MidiKeyboard ||
+                        runtime.mode == PlayMode::MidiFilter)) {
                 mode_.capture_transport_start(now_ms);
             } else {
                 mode_.capture_transport_stop();
