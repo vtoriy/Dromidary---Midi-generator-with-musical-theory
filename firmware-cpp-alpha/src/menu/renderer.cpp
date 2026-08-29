@@ -13,7 +13,7 @@ namespace {
 constexpr int kStatusY = 0;
 constexpr int kRowH = 8;
 constexpr int kContentY = 8;
-constexpr int kMaxCols = 21;  // 132px / 6px per glyph
+constexpr int kMaxCols = 21;  // 128px / 6px per glyph
 
 // QUICK 3-column cell grid: row label on the left (3-glyph names keep the
 // gutter at 18px), then three fixed columns so the cells of Key/Chord/Arp line
@@ -46,12 +46,12 @@ constexpr int kBeatDialY = 0;      // top-left y of the dial (same row as meta)
 constexpr int kBeatGap = 2;        // px between the dial and the BPM text
 
 // QUICK screen caption line: names the columns of the focused row so it is
-// always clear which parameter each cell edits (fits inside 132px width).
+// always clear which parameter each cell edits (fits inside 128px width).
 constexpr int kCaptionY = 8;
 constexpr int kCaptionRowH = 8;
 
 // DETAIL/MAIN NoteRange: a thin band under the mini-range tracks the active
-// min..max over the full 132px strip (left = note 12 / C0, right = 119 / B8).
+// min..max over the full 128px strip (left = note 12 / C0, right = 119 / B8).
 constexpr int kRangeBarY = 7;  // one pixel above the next row
 
 void draw_play_icon(DisplaySh1106& d) {
@@ -121,6 +121,7 @@ const char* screen_prefix(ScreenMode m) {
     switch (m) {
         case ScreenMode::Quick: return "Quick";
         case ScreenMode::Full: return "Menu";
+        case ScreenMode::Edit: return "Edit";
         case ScreenMode::Animation: return "Anim";
     }
     return "?";

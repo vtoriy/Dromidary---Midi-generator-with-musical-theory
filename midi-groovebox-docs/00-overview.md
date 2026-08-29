@@ -46,7 +46,7 @@ Adafruit CircuitPython 10.0.3; Python-ветка удалена при пере�
 
 - **MCU**: Raspberry Pi Pico, RP2040.
 - **Прошивка**: C++17, Pico SDK 1.5.x, TinyUSB (USB MIDI).
-- **Дисплей**: монохромный OLED SH1106, I2C, 132×64 px.
+- **Дисплей**: монохромный OLED SH1106, I2C, 128×64 px.
 - **Ввод нот**: 16 нотных кнопок + 6 функциональных (Play, Rest, Record, Shift,
   Octave Down, Octave Up).
 - **Кнопки читаются через каскад сдвиговых регистров 74HC165** (24 бита ввода:

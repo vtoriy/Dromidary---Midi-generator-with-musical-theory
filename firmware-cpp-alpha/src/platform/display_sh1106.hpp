@@ -4,11 +4,11 @@
 
 namespace drom {
 
-// SH1106 132x64 monochrome OLED (I2C) with a CPU-side framebuffer.
+// SH1106 128x64 monochrome OLED (I2C) with a CPU-side framebuffer.
 // Text is drawn into the framebuffer; flush() pushes the whole frame over I2C.
 class DisplaySh1106 {
 public:
-    static constexpr int kWidth = 132;
+    static constexpr int kWidth = 128;
     static constexpr int kHeight = 64;
 
     void init();

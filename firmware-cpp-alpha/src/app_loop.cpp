@@ -292,6 +292,13 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                 // Rest without a NOTE undo context erases the focused step.
                 editor_erase_step();
             }
+            // Rec WITHOUT Play records rest-by-rest too: after erasing (or
+            // reverting) the focused step the cursor advances, matching how a
+            // note key steps forward. Shift+Rest (whole page) is excluded.
+            if (!fn_pressed(kBtnShift) && state_.runtime.recording &&
+                !mode_.pattern_running()) {
+                editor_move(1);
+            }
         }
     }
 
@@ -355,6 +362,14 @@ void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
                         if (changed) {
                             ed_undo_begin();
                             ed_undo_record(static_cast<uint8_t>(idx), old, old_prev);
+                        }
+                        // Rec WITHOUT Play records step-by-step: after placing a
+                        // note the cursor advances to the next step, ready for
+                        // the next one. (With Play the transport drives the
+                        // cursor instead and duration comes from the hold.)
+                        if (state_.runtime.recording &&
+                            !mode_.pattern_running()) {
+                            editor_move(1);
                         }
                     } else {
                         mode_.note_on(i, button_to_note(i), now_ms);

@@ -9,7 +9,7 @@
 namespace drom {
 
 // "Night Desert" animation for the Animation screen, mirroring the reference
-// 132x64 JS prototype: twinkling stars, comets, two layered dunes and wind
+// 128x64 JS prototype: twinkling stars, comets, two layered dunes and wind
 // sand, with the "dromidary" title. Monochrome 2-colour, 12 FPS.
 class AnimationRenderer {
 public:
@@ -20,7 +20,7 @@ public:
     void render(DisplaySh1106& display);
 
 private:
-    static constexpr int kWidth = DisplaySh1106::kWidth;    // 132
+    static constexpr int kWidth = DisplaySh1106::kWidth;    // 128
     static constexpr int kHeight = DisplaySh1106::kHeight;  // 64
     static constexpr int kStarCount = 55;
     static constexpr int kCometMax = 8;

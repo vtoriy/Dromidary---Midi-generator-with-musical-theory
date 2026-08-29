@@ -479,6 +479,35 @@ void ModeEngine::note_off(uint8_t chip_idx, uint32_t now_ms) {
     if (chip_idx >= kMaxHeldKeys) {
         return;
     }
+    if (state_->runtime.screen_mode == ScreenMode::Edit) {
+        // Rec+Play: the duration of a just-written note is measured from how
+        // long the key was held, so one long press can fill a whole page. With
+        // Rec off none of this sustains a sounding note; just clear the pending
+        // capture slot so nothing lingers for the next press.
+        if (cap_pending_[chip_idx]) {
+            const bool fixdur =
+                state_->runtime.recording && state_->runtime.playing;
+            cap_pending_[chip_idx] = false;
+            const uint8_t cap = cap_note_[chip_idx];
+            if (fixdur && cap != 0) {
+                const uint32_t held = now_ms - cap_start_ms_[chip_idx];
+                const uint8_t div = nearest_len_div(
+                    held, state_->active_pattern().timing.bpm);
+                const uint8_t idx = cap_step_[chip_idx];
+                if (idx < kStepCountMax) {
+                    auto& s = state_->active_pattern().steps[idx];
+                    if (s.notes[0] == cap) {
+                        s.len_div = div;
+                    }
+                }
+                if (midi_ != nullptr) {
+                    midi_->note_off(cap);
+                }
+            }
+            cap_note_[chip_idx] = 0;
+        }
+        return;
+    }
     if (state_->runtime.mode == PlayMode::Pattern) {
         // End the monitor note and fix the recorded step's duration from the
         // measured hold time.

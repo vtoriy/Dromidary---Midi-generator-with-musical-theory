@@ -37,12 +37,12 @@
 | 🎚️ | **Gate/ADSR** | Attack задерживает Note On, release продлевает Note Off; ячейки On/Atk/Dec прямо в QUICK |
 | 🎸 | **Voicing** | Block / Strum / Roll (с `strum_delay_ms`) для аккордов в live |
 | ⏱️ | **MIDI Clock** | Master (шлёт F8/Start/Stop с точным BPM) и Slave (следует за хостом DAW) |
+| 🎹 **Pattern Editor (EDIT)** | Экран пиано-ролла для записи/редактирования петли паттерна: пошаговый ввод по **Rec** (без Play — шаг за шагом; с Play — длительность от удержания кнопки), копирование/вставка/дубль выделенной области (Shift+нота), полный undo/redo, выделение диапазона |
 | 🔬 | **Экран Test** | Диагностика распиновки кнопок (System → Test), выход Shift+клик |
 | 🎚️ | **CC-дубли** | Функц. кнопки дублируются MIDI CC 20–25 на канале 16 для DAW |
 
-**Не реализовано (отложено):** воспроизведение/запись записанного паттерна
-(режим Pattern), MIDI Filter (нужен UART MIDI IN), UART MIDI DIN, сохранение
-паттернов во flash, подключение Shape/Dens к генерации. Подробно —
+**Не реализовано (отложено):** MIDI Filter (нужен UART MIDI IN), UART MIDI DIN,
+сохранение паттернов во flash, подключение Shape/Dens к генерации. Подробно —
 [`midi-groovebox-docs/07-roadmap-open-questions.md`](midi-groovebox-docs/07-roadmap-open-questions.md).
 
 ---
@@ -86,7 +86,7 @@ Transpose ──► Key Filter ──► Chord Builder ──► secondary filte
 |---|---|
 | 🧠 MCU | Raspberry Pi Pico, **RP2040** |
 | 💾 Прошивка | C++17, **Pico SDK 1.5.x**, TinyUSB |
-| 🖥️ Дисплей | OLED **SH1106**, I2C0, 132×64 px, адрес 0x3C |
+| 🖥️ Дисплей | OLED **SH1106**, I2C0, **128×64** px (видимая ширина модуля), адрес 0x3C |
 | 🎹 Нотные кнопки | **16** шт. (1–12 = C..B текущей октавы, 13–16 = C–D# октавой выше) |
 | ⚙️ Функц. кнопки | **6** шт.: Play, Rest, Record, Shift, Oct Down, Oct Up |
 | 🔌 Чтение кнопок | Каскад **74HC165** (24 бита, Latch=GP2, Clock=GP3, Data=GP4) |
@@ -102,6 +102,10 @@ Transpose ──► Key Filter ──► Chord Builder ──► secondary filte
 ## 🖱️ Управление
 
 - **Нотные клавиши** — игра нот (в PTRN — генерация паттерна); октава — Oct Up/Dn.
+- **Экран EDIT** (long-press цикл Quick → FULL → EDIT) — пиано-ролл паттерна:
+  ←/→ двигают шаг, нотная клавиша пишет ноту на текущий шаг, **Shift+нота** —
+  копировать/вставить/дубль/undo/redo, **Shift+клик** — выделение диапазона (SELECT),
+  **Rec** — запись (без Play — пошагово, с Play — длительность от удержания кнопки).
 - **Play** — старт/стоп; в RND/PTRN — цикл генерации/паттерна.
   **Rest** — live-mute пока зажата; **Rest + клик джойстика** — сброс значения.
 - **Заголовок QUICK** — клик переключает режим KB/RND/PTRN (наклон вверх с любой

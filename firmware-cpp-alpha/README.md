@@ -12,7 +12,7 @@ Implemented:
 - typed static state (`struct`/`enum`, no dynamic allocation)
 - 24-button scanning through a 74HC165 cascade (16 note keys + 6 function keys)
 - KY-023 joystick (8-way navigation, click, long-press)
-- SH1106 132x64 OLED driver (I2C, 5x7 font, framebuffer + flush)
+- SH1106 128x64 OLED driver (I2C, 5x7 font, framebuffer + flush)
 - Quick (Level 1) panel with click-edit cells, radial zones and Detail submenus
 - Full MAIN menu tree (Pattern, Key/Scale, Chord, Arpeggiator, Timing, Gate/ADSR,
   Transpose, Octave, MIDI)
