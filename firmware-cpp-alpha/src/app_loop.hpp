@@ -39,6 +39,7 @@ private:
     // many steps). Any new batch clears the redo log.
     void ed_undo_begin();
     void ed_undo_record(uint8_t index, const Step& old_step, int16_t old_prev);
+    void ed_undo_len(uint8_t new_len);  // undoable loop-length change (no step)
     bool ed_undo();
     bool ed_redo();
 

@@ -40,12 +40,16 @@ constexpr uint8_t kBtnOctUp = 22;    // chip3 bit6 ("+")
 constexpr uint8_t kBtnOctDown = 23;  // chip3 bit7 ("-")
 
 // Shift + note-key hotkeys in the EDIT screen. The 16 raw note bits (0..15)
-// are mapped positionally; bit 0 is the lowest white key etc.
+// are mapped positionally; bit 0 is the lowest white key etc. Copy/Paste/Dup
+// sit together (C, C#, D) and Undo/Redo together (D#, E) for a logical layout.
 constexpr uint8_t kKeyCopy = 0;         // C   -> copy visible page
 constexpr uint8_t kKeyPaste = 1;        // C#  -> paste clipboard onto page
-constexpr uint8_t kKeyUndo = 2;         // D   -> undo last batch
-constexpr uint8_t kKeyRedo = 3;         // D#  -> redo
-constexpr uint8_t kKeyDup = 4;          // E   -> duplicate (copy+paste) page
+constexpr uint8_t kKeyDup = 2;          // D   -> duplicate (copy+paste) page
+constexpr uint8_t kKeyUndo = 3;         // D#  -> undo last batch
+constexpr uint8_t kKeyRedo = 4;         // E   -> redo
+
+// Sentinel step index marking a length-only undo/redo entry (no step touched).
+constexpr uint8_t kLenOnlyIndex = 0xFF;
 
 constexpr uint32_t kHintMs = 700;  // how long a hotkey confirmation stays up
 
@@ -740,8 +744,9 @@ void AppLoop::editor_tilt(Direction dir, bool shift) {
             // loop, so page/page are recomputed consistently).
             editor_move(d * 16);
         } else if (ed.field == 3) {
-            // Focused PLEN: pattern length in doubling steps; shrinking
-            // clears everything past the new end.
+            // Focused PLEN: pattern length in doubling steps. Shrinking only
+            // narrows the loop — the trimmed steps' notes are KEPT, so
+            // re-expanding restores them (nothing is destroyed).
             int idx = 2;
             for (int i = 0; i < 5; ++i) {
                 if (kPatternLens[i] == len) { idx = i; break; }
@@ -749,18 +754,7 @@ void AppLoop::editor_tilt(Direction dir, bool shift) {
             idx = std::clamp(idx + d, 0, 4);
             const int new_len = static_cast<int>(kPatternLens[idx]);
             if (new_len != len) {
-                ed_undo_begin();
-                for (int i = new_len; i < kStepCountMax; ++i) {
-                    Step old = p.steps[i];
-                    const int16_t old_prev = ed.prev_notes[i];
-                    auto& st = p.steps[i];
-                    st.notes[0] = 0;
-                    st.note_count = 0;
-                    st.active = false;
-                    ed.prev_notes[i] = -1;  // trimmed steps lose their original
-                    ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
-                }
-                p.length = static_cast<uint8_t>(new_len);
+                ed_undo_len(static_cast<uint8_t>(new_len));
                 // Clamp the cursor/selection back into the shortened loop.
                 if (static_cast<int>(ed.cur) >= new_len) {
                     ed.cur = static_cast<uint8_t>(new_len - 1);
@@ -887,10 +881,10 @@ void AppLoop::editor_erase_page() {
 
 void AppLoop::editor_select_toggle() {
     auto& ed = state_.editor;
-    if (!ed.sel_mode) {
-        // Enter SELECT: anchor the range to the WHOLE visible page, starting
-        // at the first step of the screen (not at the recording cursor). The
-        // range stays highlighted after leaving SELECT for later operations.
+    if (!ed.sel_mode && !ed.sel_active) {
+        // No selection yet: enter SELECT and anchor the range to the WHOLE
+        // visible page, starting at the first step of the screen (not at the
+        // recording cursor). The range stays highlighted after leaving SELECT.
         const int len = std::max<int>(
             1, std::min<int>(state_.active_pattern().length, kStepCountMax));
         const int start = static_cast<int>(ed.page) * 16;
@@ -899,9 +893,14 @@ void AppLoop::editor_select_toggle() {
         ed.sel_b = static_cast<uint8_t>(std::max(0, end));
         ed.sel_active = true;
         ed.sel_mode = true;
-    } else {
-        // Exit SELECT: the range remains active/visible for later ops.
+    } else if (ed.sel_mode) {
+        // Exit SELECT: the range remains active/visible for later operations.
         ed.sel_mode = false;
+    } else {
+        // Not shaping but a range is still marked: clear the selection.
+        ed.sel_active = false;
+        ed.sel_a = 0;
+        ed.sel_b = 0;
     }
     ui_dirty_ = true;
 }
@@ -964,6 +963,26 @@ void AppLoop::ed_undo_record(uint8_t index, const Step& old_step,
     e.len_after = state_.active_pattern().length;
 }
 
+void AppLoop::ed_undo_len(uint8_t new_len) {
+    // A loop-length change that must NOT touch any step (shrinking keeps the
+    // trimmed notes). Record it as a single length-only entry (sentinel index)
+    // and set the length; undo/redo restore just the length, not steps.
+    auto& ed = state_.editor;
+    ed.redo_size = 0;
+    ed.redo_marks_count = 0;
+    ed.undo_len_before = state_.active_pattern().length;
+    if (ed.undo_marks_count < kUndoMarksMax) {
+        ed.undo_marks[ed.undo_marks_count++] = ed.undo_size;
+    }
+    if (ed.undo_size < kUndoDepth) {
+        auto& e = ed.undo_buf[ed.undo_size++];
+        e.index = kLenOnlyIndex;
+        e.len_before = ed.undo_len_before;
+        e.len_after = new_len;
+    }
+    state_.active_pattern().length = new_len;
+}
+
 bool AppLoop::ed_undo() {
     auto& ed = state_.editor;
     if (ed.undo_marks_count == 0 || ed.undo_size == 0) {
@@ -980,17 +999,27 @@ bool AppLoop::ed_undo() {
         ed.redo_marks[ed.redo_marks_count++] = redo_start;
     }
     // Apply the OLD state and restore per-step originals + loop length.
+    // A length-only entry (sentinel index) changes just the loop length and
+    // touches no step; it also suppresses the cursor jump for that batch.
     Pattern& p = state_.active_pattern();
+    bool len_only = false;
     for (uint8_t i = 0; i < batch_len; ++i) {
         const auto& e = ed.undo_buf[m + i];
+        if (e.index == kLenOnlyIndex) {
+            len_only = true;
+            continue;
+        }
         p.steps[e.index] = e.old_step;
         ed.prev_notes[e.index] = e.old_prev;
         p.length = e.len_before;  // last entry in the batch sets the length
     }
+    if (len_only) {
+        p.length = ed.undo_buf[m].len_before;
+    }
     ed.undo_size = m;
     ed.undo_marks_count = static_cast<uint8_t>(ed.undo_marks_count - 1);
     // Move the cursor to the first affected step for visibility.
-    if (batch_len > 0) {
+    if (batch_len > 0 && !len_only) {
         const auto& first = ed.undo_buf[m];
         ed.cur = ed.selected = first.index;
         state_.runtime.current_step = first.index;
@@ -1015,15 +1044,23 @@ bool AppLoop::ed_redo() {
         ed.undo_marks[ed.undo_marks_count++] = undo_start;
     }
     Pattern& p = state_.active_pattern();
+    bool len_only = false;
     for (uint8_t i = 0; i < batch_len; ++i) {
         const auto& e = ed.redo_buf[m + i];
+        if (e.index == kLenOnlyIndex) {
+            len_only = true;
+            continue;
+        }
         p.steps[e.index] = e.new_step;
         ed.prev_notes[e.index] = e.new_prev;
         p.length = e.len_after;  // last entry in the batch sets the length
     }
+    if (len_only) {
+        p.length = ed.redo_buf[m].len_after;
+    }
     ed.redo_size = m;
     ed.redo_marks_count = static_cast<uint8_t>(ed.redo_marks_count - 1);
-    if (batch_len > 0) {
+    if (batch_len > 0 && !len_only) {
         const auto& first = ed.redo_buf[m];
         ed.cur = ed.selected = first.index;
         state_.runtime.current_step = first.index;
