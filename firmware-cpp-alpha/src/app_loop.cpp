@@ -1339,6 +1339,13 @@ void AppLoop::update_beat(uint32_t now_ms) {
                 state_.runtime.screen_mode != ScreenMode::Edit) {
                 state_.editor.sel_mode = false;
                 state_.editor.sel_active = false;
+                // Don't carry a running slot transport out of the editor:
+                // silence/stop it so no note hangs and the next re-entry starts
+                // clean. (The EDIT Play path is slot audition; outside the
+                // editor the same flag means something else.)
+                mode_.pattern_stop();
+                mode_.capture_transport_stop();
+                state_.runtime.playing = false;
             }
             if (state_.runtime.screen_mode == ScreenMode::Animation &&
                 !screensaver_active_) {

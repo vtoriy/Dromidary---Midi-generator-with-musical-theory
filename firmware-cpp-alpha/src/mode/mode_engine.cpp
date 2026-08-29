@@ -611,9 +611,13 @@ void ModeEngine::tick(uint32_t now_ms) {
         gen_stop();
     }
     // Pattern transport: grid playback in PTRN mode, silent grid while
-    // recording RND output elsewhere.
+    // recording RND output elsewhere, and full audition grid while the
+    // pattern editor is on screen (Play there always runs the slot — the
+    // advancing playhead is what the user hears, whatever play mode they
+    // originally came from).
     if (ptn_playing_ && state_ != nullptr) {
-        if (state_->runtime.mode == PlayMode::RandomPattern || capture_only_) {
+        if (state_->runtime.screen_mode == ScreenMode::Edit ||
+            state_->runtime.mode == PlayMode::RandomPattern || capture_only_) {
             pattern_advance(now_ms);
         } else {
             capture_transport_stop();
