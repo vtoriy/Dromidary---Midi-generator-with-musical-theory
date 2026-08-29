@@ -15,6 +15,7 @@ public:
     void clear();
     void set_pixel(int x, int y, bool on);
     void fill_rect(int x, int y, int w, int h, bool on);
+    void invert_rect(int x, int y, int w, int h);  // XOR the region
     void draw_char(char c, int x, int y);   // 5x7 glyph, advance 6 px
     void draw_text(const char* text, int x, int y);
     void draw_text_px(const char* text, int x, int y, bool value); // glyphs set to `value`

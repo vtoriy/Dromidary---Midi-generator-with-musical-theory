@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 
 #include "../types.hpp"
@@ -55,6 +56,19 @@ struct PtnEditorUI {
     int16_t prev_note {-1}; // original note of the selected step (undo); -1 = none
     std::array<int16_t, kStepCountMax> prev_notes {}; // per-step original note
 
+    // --- Range selection (universal mechanism, Phase 1) ---------------------
+    // A selection is an inclusive step range [aLo..bHi] that stays visible
+    // after leaving SELECT mode so any future operation (pitch, chop, ...) can
+    // consume it. sel_mode is the dedicated SELECT sub-mode of the editor
+    // (toggled by Shift+joy-click); here plain tilt grows/shrinks the movable
+    // edge and Shift+tilt grows/shrinks the other one. Selection is a separate
+    // concern from the single unified cursor/playhead marker (cur/selected),
+    // so note editing, playing and selecting do not fight each other.
+    bool sel_mode {false};    // SELECT sub-mode active
+    bool sel_active {false};  // a range is currently marked
+    uint8_t sel_a {0};        // first boundary (absolute step)
+    uint8_t sel_b {0};        // second boundary (absolute step)
+
     // Clipboard (whole-page copy). clip_len is the number of valid steps.
     std::array<Step, kStepCountMax> clip {};
     uint8_t clip_len {0};
@@ -87,6 +101,22 @@ struct AppState {
     Pattern& active_pattern() { return slots[current_slot]; }
     const Pattern& active_pattern() const { return slots[current_slot]; }
 };
+
+// Inclusive lower/upper bounds of the current selection (a and b are unordered
+// boundaries). Returns false when there is no active range. Clamped to the
+// given loop length so callers never touch steps beyond the pattern end.
+inline bool selection_bounds(const PtnEditorUI& ed, int len, int& lo, int& hi) {
+    if (!ed.sel_active) {
+        return false;
+    }
+    int a = std::min<int>(static_cast<int>(ed.sel_a),
+                          std::max<int>(0, len - 1));
+    int b = std::min<int>(static_cast<int>(ed.sel_b),
+                          std::max<int>(0, len - 1));
+    lo = std::min(a, b);
+    hi = std::max(a, b);
+    return true;
+}
 
 void init_default_state(AppState& state);
 

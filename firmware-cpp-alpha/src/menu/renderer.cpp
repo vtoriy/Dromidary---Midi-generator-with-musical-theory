@@ -444,6 +444,29 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         d.fill_rect(bx, roll_top, 1, roll_h, true);  // moving vertical marker
     }
 
+    // Range selection: a marked inclusive step range inverts the whole height
+    // of the roll over the selected columns (clipped to the visible page), so
+    // it is unmistakable which area is selected. It is a separate concern from
+    // the cursor/playhead marker, so it never moves the edit target.
+    {
+        int sel_lo = 0, sel_hi = 0;
+        if (selection_bounds(ed, len, sel_lo, sel_hi)) {
+            int first = -1, last = -1;
+            for (int c = 0; c < page_len; ++c) {
+                const int abs = static_cast<int>(ed.page) * 16 + c;
+                if (abs >= sel_lo && abs <= sel_hi) {
+                    if (first < 0) first = c;
+                    last = c;
+                }
+            }
+            if (first >= 0) {
+                const int ux = first * col_w;
+                const int uw = (last - first + 1) * col_w;
+                d.invert_rect(ux, roll_top, uw,
+                              floor_y + 2 - roll_top);  // full roll height
+            }
+        }
+    }
 
 
     // -- Detail line: STEP NOTE LEN ON PLEN(page) ----------------------------
@@ -531,6 +554,14 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         if (*label) {
             d.draw_text(label, 0, DisplaySh1106::kHeight - 10);
         }
+    }
+    // SELECT indicator at the bottom-right of the editor: "SEL" when a range is
+    // marked, "SEL+" while the SELECT sub-mode is active (range being shaped).
+    if (ed.sel_active) {
+        const char* m = ed.sel_mode ? "SEL+" : "SEL";
+        const int w = static_cast<int>(std::strlen(m)) *
+                      DisplaySh1106::kTextAdvance + 8;
+        d.draw_text(m, DisplaySh1106::kWidth - w, DisplaySh1106::kHeight - 10);
     }
 }
 

@@ -30,6 +30,7 @@ private:
     void editor_cycle_field();
     void editor_erase_step();   // Rest: clear the focused step
     void editor_erase_page();   // Shift+Rest: clear the visible 16-step page
+    void editor_select_toggle();  // Shift+click: enter/leave the SELECT sub-mode
     void editor_shortcut(uint8_t key, uint32_t now_ms);  // Shift + note-key hotkeys
 
     // Undo/redo (command-based, batched). Callers snapshot the OLD state, then
@@ -83,6 +84,7 @@ private:
     uint32_t last_joy_tilt_ms_ {0};
     Direction last_joy_dir_ {Direction::Center};
     uint32_t joy_hold_ms_ {0};  // start of the current same-direction hold (for tilt acceleration)
+    uint32_t joy_suppress_tilt_until_ {0};  // ignore tilts until this time (post click / screen entry)
     bool joy_btn_prev_ {false};
     uint32_t joy_btn_press_ms_ {0};
     uint32_t joy_btn_last_click_ms_ {0};

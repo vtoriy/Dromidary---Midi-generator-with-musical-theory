@@ -17,6 +17,7 @@ namespace {
 constexpr uint8_t kMidiOctaveOffset = 2;
 constexpr uint8_t kKeyDebounce = 5;
 constexpr uint32_t kJoyRepeatMs = 190;
+constexpr uint32_t kEditorTiltDeadtimeMs = 200;  // ignore tilts right after an editor click / entry
 constexpr uint32_t kFlushMs = 40;
 constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
 constexpr uint32_t kManualAnimWakeGuardMs = 400; // ignore wake edges after manual launch
@@ -334,6 +335,10 @@ void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
                     if (state_.runtime.screen_mode == ScreenMode::Edit &&
                         fn_pressed(kBtnShift)) {
                         editor_shortcut(i, now_ms);
+                    } else if (state_.runtime.screen_mode == ScreenMode::Edit &&
+                               state_.editor.sel_mode) {
+                        // In the SELECT sub-mode a bare note key must not edit
+                        // a step — it only shapes the marked range.
                     } else if (state_.runtime.screen_mode == ScreenMode::Edit) {
                         // Note-key step write is an undoable single-step batch.
                         const int idx = std::min<int>(
@@ -417,20 +422,37 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
     if (btn && !joy_btn_long_ && (now_ms - joy_btn_press_ms_) >= state_.runtime.click.long_ms) {
         joy_btn_long_ = true;
         menu_.press_long();
+        // If the long-press just dropped us into the pattern editor, ignore an
+        // immediate tilt so the deflection that produced the hold cannot start
+        // editing a note before the hand settles.
+        if (state_.runtime.screen_mode == ScreenMode::Edit) {
+            joy_suppress_tilt_until_ = now_ms + kEditorTiltDeadtimeMs;
+            last_joy_dir_ = Direction::Center;
+            joy_hold_ms_ = now_ms;
+            last_joy_tilt_ms_ = 0;
+        }
         ui_dirty_ = true;
         mode_.on_arp_config_changed(now_ms);
     }
     if (!btn && joy_btn_prev_) {
         if (!joy_btn_long_) {
             if (state_.runtime.screen_mode == ScreenMode::Edit) {
-                // Editor click: plain click SELECTS the step under the cursor
-                // (so note keys assign to it) and cycles the focused field;
-                // Rest+click erases the focused step.
-                if (fn_pressed(kBtnRest)) {
+                // Editor click: Shift+click toggles the SELECT sub-mode;
+                // Rest+click erases the focused step; a plain click SELECTS the
+                // step under the cursor (so note keys assign to it) and cycles
+                // the focused field.
+                if (fn_pressed(kBtnShift)) {
+                    editor_select_toggle();
+                } else if (fn_pressed(kBtnRest)) {
                     editor_erase_step();
                 } else {
                     editor_cycle_field();  // also selects the cursor step
                 }
+                // The joystick is often still slightly deflected right after the
+                // click that selected/edited; swallow an immediate tilt so it
+                // cannot move the cursor or edit a note the moment we enter a
+                // field.
+                joy_suppress_tilt_until_ = now_ms + kEditorTiltDeadtimeMs;
             } else {
                 // Rest + click resets the current value (QUICK cell or
                 // DETAIL/MAIN item). Otherwise a double-click in DETAIL/MAIN is
@@ -480,7 +502,15 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
             interval = 140;
             taps = 1;
         }
-        if ((now_ms - last_joy_tilt_ms_) >= interval) {
+        if (now_ms < joy_suppress_tilt_until_) {
+            // Right after a click or entering the editor the joystick often
+            // still reads a small deflection from the same motion; swallow it so
+            // it cannot immediately move the cursor or edit a note. The hold is
+            // reset so a later deliberate tilt starts from a fresh repeat.
+            last_joy_dir_ = Direction::Center;
+            joy_hold_ms_ = now_ms;
+            last_joy_tilt_ms_ = 0;
+        } else if ((now_ms - last_joy_tilt_ms_) >= interval) {
             last_joy_tilt_ms_ = now_ms;
             const bool shift = fn_pressed(kBtnShift);
             if (state_.runtime.screen_mode == ScreenMode::Edit) {
@@ -618,7 +648,14 @@ void AppLoop::editor_move(int delta) {
         nc = 0;                    // right of last step -> wrap to step 1
     }
     ed.cur = static_cast<uint8_t>(nc);
-    ed.page = static_cast<uint8_t>(static_cast<int>(ed.cur) / 16);
+    const uint8_t new_page = static_cast<uint8_t>(static_cast<int>(ed.cur) / 16);
+    // Normal cursor navigation that crosses a page boundary clears any marked
+    // range: the selection is page-local unless it is being shaped in SELECT
+    // mode (which never routes through here).
+    if (ed.sel_active && new_page != ed.page) {
+        ed.sel_active = false;
+    }
+    ed.page = new_page;
     state_.runtime.current_step = ed.cur;
 }
 
@@ -629,6 +666,51 @@ void AppLoop::editor_tilt(Direction dir, bool shift) {
     Pattern& p = state_.active_pattern();
     Step& s = p.steps[std::min<int>(ed.cur, kStepCountMax - 1)];
     const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+
+    // SELECT sub-mode: the range is a bounded block on the current page, only
+    // loosely tied to the cursor. Left/Right shift the START edge, Up/down
+    // expand/shrink the length (the right edge). It never moves the cursor/
+    // playhead, so recording position and the selection are independent.
+    if (ed.sel_mode) {
+        // The range is confined to the visible page (columns of the current
+        // screen), so it stays fully in view and is decoupled from the cursor
+        // step, not the page. Left/Right SHIFT the whole block (start and end
+        // together, keeping its length); Up/Down expand (right edge out) or
+        // shrink (right edge in) the length.
+        const int page_lo = static_cast<int>(ed.page) * 16;
+        const int page_hi = std::min(page_lo + 15, len - 1);
+        int a = std::clamp(static_cast<int>(ed.sel_a), page_lo, page_hi);
+        int b = std::clamp(static_cast<int>(ed.sel_b), page_lo, page_hi);
+        switch (dir) {
+            case Direction::Left:
+                // move the whole block left by one, clamped to the page
+                if (a > page_lo) {
+                    --a;
+                    --b;
+                }
+                break;
+            case Direction::Right:
+                // move the whole block right by one, clamped to the page
+                if (b < page_hi) {
+                    ++a;
+                    ++b;
+                }
+                break;
+            case Direction::Up:   // expand: push the right edge further out
+                b = std::min(page_hi, b + 1);
+                break;
+            case Direction::Down: // shrink: pull the right edge back in
+                b = std::max(a, b - 1);
+                break;
+            default:
+                break;
+        }
+        ed.sel_a = static_cast<uint8_t>(a);
+        ed.sel_b = static_cast<uint8_t>(b);
+        ed.sel_active = true;
+        ui_dirty_ = true;
+        return;
+    }
 
     if (dir == Direction::Left || dir == Direction::Right) {
         const int d = (dir == Direction::Right) ? 1 : -1;
@@ -783,6 +865,27 @@ void AppLoop::editor_erase_page() {
     }
 }
 
+void AppLoop::editor_select_toggle() {
+    auto& ed = state_.editor;
+    if (!ed.sel_mode) {
+        // Enter SELECT: anchor the range to the WHOLE visible page, starting
+        // at the first step of the screen (not at the recording cursor). The
+        // range stays highlighted after leaving SELECT for later operations.
+        const int len = std::max<int>(
+            1, std::min<int>(state_.active_pattern().length, kStepCountMax));
+        const int start = static_cast<int>(ed.page) * 16;
+        const int end = std::min(start + 16, len) - 1;
+        ed.sel_a = static_cast<uint8_t>(std::max(0, start));
+        ed.sel_b = static_cast<uint8_t>(std::max(0, end));
+        ed.sel_active = true;
+        ed.sel_mode = true;
+    } else {
+        // Exit SELECT: the range remains active/visible for later ops.
+        ed.sel_mode = false;
+    }
+    ui_dirty_ = true;
+}
+
 void AppLoop::set_hint(uint8_t value, uint32_t now_ms) {
     auto& ed = state_.editor;
     ed.hint = value;
@@ -920,19 +1023,36 @@ void AppLoop::editor_shortcut(uint8_t key, uint32_t now_ms) {
 
     switch (key) {
         case kKeyCopy: {
+            // When a range is selected, copy exactly that range. Otherwise fall
+            // back to the whole visible page so the shortcut still works as a
+            // quick whole-page grab.
             ed.clip_len = 0;
-            for (std::size_t i = 0; i < page_len; ++i) {
-                ed.clip[i] = p.steps[start + i];
+            if (ed.sel_active) {
+                const int lo = std::max<int>(0, ed.sel_a);
+                const int hi =
+                    std::min<int>(static_cast<int>(len) - 1, ed.sel_b);
+                for (int i = lo; i <= hi; ++i) {
+                    ed.clip[ed.clip_len++] = p.steps[static_cast<std::size_t>(i)];
+                }
+                ed.clip_anchor = static_cast<uint8_t>(lo);
+            } else {
+                for (std::size_t i = 0; i < page_len; ++i) {
+                    ed.clip[i] = p.steps[start + i];
+                }
+                ed.clip_len = static_cast<uint8_t>(page_len);
+                ed.clip_anchor = static_cast<uint8_t>(start);
             }
-            ed.clip_len = static_cast<uint8_t>(page_len);
-            ed.clip_anchor = static_cast<uint8_t>(start);
             set_hint(kHintCopy, now_ms);
             break;
         }
         case kKeyPaste: {
+            // Paste begins at the step the cursor currently sits on, so a copied
+            // range can be laid down anywhere rather than only at the page edge.
+            const std::size_t pstart =
+                std::min<std::size_t>(ed.cur, len - 1);
             ed_undo_begin();
             for (uint8_t k = 0; k < ed.clip_len; ++k) {
-                const std::size_t idx = start + k;
+                const std::size_t idx = pstart + k;
                 if (idx >= len) {
                     break;
                 }
@@ -1197,6 +1317,14 @@ void AppLoop::update_beat(uint32_t now_ms) {
         // because the activating click itself is fresh input — without this
         // the animation would wake instantly.
         if (state_.runtime.screen_mode != last_screen_mode_) {
+            // Leaving the EDIT screen drops any SELECT sub-mode and range: it
+            // is editor-local. (Entering EDIT with an old range would leak a
+            // stale highlight into a freshly reopened editor.)
+            if (last_screen_mode_ == ScreenMode::Edit &&
+                state_.runtime.screen_mode != ScreenMode::Edit) {
+                state_.editor.sel_mode = false;
+                state_.editor.sel_active = false;
+            }
             if (state_.runtime.screen_mode == ScreenMode::Animation &&
                 !screensaver_active_) {
                 screensaver_origin_ = last_screen_mode_;

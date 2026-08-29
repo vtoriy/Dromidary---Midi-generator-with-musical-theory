@@ -208,6 +208,29 @@ void DisplaySh1106::fill_rect(int x, int y, int w, int h, bool on) {
     }
 }
 
+void DisplaySh1106::invert_rect(int x, int y, int w, int h) {
+    for (int yy = 0; yy < h; ++yy) {
+        int cy = y + yy;
+        if (cy < 0 || cy >= kHeight) {
+            continue;
+        }
+        const int page = cy / 8;
+        const int bit = cy % 8;
+        const uint8_t mask = static_cast<uint8_t>(1u << bit);
+        const int base = page * kWidth;
+        for (int xx = 0; xx < w; ++xx) {
+            int cx = x + xx;
+            if (cx < 0) {
+                continue;
+            }
+            if (cx >= kWidth) {
+                break;
+            }
+            fb_[base + cx] ^= mask;
+        }
+    }
+}
+
 void DisplaySh1106::draw_text_px(const char* text, int x, int y, bool value) {
     int cx = x;
     while (*text != '\0' && cx < kWidth) {
