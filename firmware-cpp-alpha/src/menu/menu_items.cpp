@@ -407,6 +407,12 @@ ItemRef emit_randomize_block(MenuContent& c, Pattern& p, AppState* st) {
         }, 20, 100, 10));
     // PTRN only: re-roll the generated slot keeping the current anchor.
     emit(c, action_item("Regen", [st]() { st->runtime.regen_req = true; }));
+    // Onset grid resolution for recording/playback: Off = 1/16 note,
+    // On = 1/64 note (finer rhythm, shorter max loop).
+    emit(c, option_idx_io("Grid64",
+        [&p]() { return p.grid64 ? 1 : 0; },
+        [&p](int32_t v) { p.grid64 = (v != 0); },
+        kOnOffLabels, 2));
     return wrap_ref(c, start);
 }
 

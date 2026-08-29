@@ -23,6 +23,26 @@ private:
     void update_midi_clock(uint32_t now_ms);
     void update_beat(uint32_t now_ms);
     void update_idle_screensaver(uint32_t now_ms, bool fresh_input);
+
+    // Pattern editor (ScreenMode::Edit) input handlers.
+    void editor_move(int delta);
+    void editor_tilt(Direction dir, bool shift);
+    void editor_cycle_field();
+    void editor_erase_step();   // Rest: clear the focused step
+    void editor_erase_page();   // Shift+Rest: clear the visible 16-step page
+    void editor_shortcut(uint8_t key, uint32_t now_ms);  // Shift + note-key hotkeys
+
+    // Undo/redo (command-based, batched). Callers snapshot the OLD state, then
+    // modify the pattern/prev_notes, then ed_undo_record(...) reads the NEW
+    // state back in. ed_undo_begin() opens a batch (one user action may touch
+    // many steps). Any new batch clears the redo log.
+    void ed_undo_begin();
+    void ed_undo_record(uint8_t index, const Step& old_step, int16_t old_prev);
+    bool ed_undo();
+    bool ed_redo();
+
+    void set_hint(uint8_t value, uint32_t now_ms);
+
     bool is_pressed(uint32_t raw, uint8_t bit) const;
     uint8_t button_to_note(uint8_t index) const;
 

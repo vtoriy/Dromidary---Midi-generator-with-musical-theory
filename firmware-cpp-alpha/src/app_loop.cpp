@@ -1,10 +1,12 @@
 #include "app_loop.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 #include "pico/stdlib.h"
 #include "tusb.h"
 
+#include "engine/midi_chain.hpp"
 #include "persist.hpp"
 #include "platform/board_pins.hpp"
 
@@ -18,6 +20,7 @@ constexpr uint32_t kJoyRepeatMs = 190;
 constexpr uint32_t kFlushMs = 40;
 constexpr uint32_t kAnimFrameMs = 1000 / 12;  // 12 FPS
 constexpr uint32_t kManualAnimWakeGuardMs = 400; // ignore wake edges after manual launch
+constexpr int32_t kPatternLens[5] = {4, 8, 16, 32, 64}; // STEP/PLEN doubling scale
 constexpr uint32_t kPersistSaveDelayMs = 500; // wait 0.5s of no edits before flashing
 
 // MIDI Clock: 24 pulses per quarter note (as with a DIN sync box).
@@ -34,6 +37,16 @@ constexpr uint8_t kBtnRec = 18;      // chip3 bit2
 constexpr uint8_t kBtnShift = 19;    // chip3 bit3
 constexpr uint8_t kBtnOctUp = 22;    // chip3 bit6 ("+")
 constexpr uint8_t kBtnOctDown = 23;  // chip3 bit7 ("-")
+
+// Shift + note-key hotkeys in the EDIT screen. The 16 raw note bits (0..15)
+// are mapped positionally; bit 0 is the lowest white key etc.
+constexpr uint8_t kKeyCopy = 0;         // C   -> copy visible page
+constexpr uint8_t kKeyPaste = 1;        // C#  -> paste clipboard onto page
+constexpr uint8_t kKeyUndo = 2;         // D   -> undo last batch
+constexpr uint8_t kKeyRedo = 3;         // D#  -> redo
+constexpr uint8_t kKeyDup = 4;          // E   -> duplicate (copy+paste) page
+
+constexpr uint32_t kHintMs = 700;  // how long a hotkey confirmation stays up
 
 }  // namespace
 
@@ -187,7 +200,14 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
     // otherwise the first Play press would re-anchor instead of stopping.
     if (fn_edge(kBtnPlay)) {
         runtime.playing = !runtime.playing;
-        if (runtime.mode == PlayMode::RandomNote) {
+        if (state_.runtime.screen_mode == ScreenMode::Edit) {
+            // In the editor Play ALWAYS auditions the pattern slot (no
+            // generation) — whatever play mode the user came from. This makes
+            // toggling predictable and stops the mismatch where the icon
+            // shows "playing" but nothing advances.
+            mode_.pattern_toggle(now_ms);
+            runtime.playing = mode_.pattern_running();
+        } else if (runtime.mode == PlayMode::RandomNote) {
             if (mode_.random_loop_running()) {
                 runtime.playing = false;
                 mode_.random_loop_stop();
@@ -205,6 +225,10 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
             // press is what creates a new pattern.
             mode_.gen_toggle_play();
             runtime.playing = mode_.gen_running();
+        } else if (runtime.mode == PlayMode::Pattern) {
+            // PTRN slot playback (audition while editing / after recording).
+            mode_.pattern_toggle(now_ms);
+            runtime.playing = mode_.pattern_running();
         } else if (runtime.mode == PlayMode::MidiKeyboard || runtime.mode == PlayMode::MidiFilter) {
             // Play as a transport stop for the live arpeggio: one press silences
             // everywhere the arp/keyboard is sounding, keeping a binary `playing`
@@ -220,7 +244,54 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
 
     if (fn_edge(kBtnRec)) {
         runtime.recording = !runtime.recording;
+        // Recording arms the silent pattern grid so that whatever the player
+        // hears is quantised into the active slot: KB/Filter keys, RandomNote
+        // output (and PTRN live playback all record while Rec is held up).
+        if (!runtime.test_mode) {
+            if (runtime.recording &&
+                (runtime.mode == PlayMode::Pattern ||
+                 runtime.mode == PlayMode::RandomNote ||
+                 runtime.mode == PlayMode::MidiKeyboard ||
+                 runtime.mode == PlayMode::MidiFilter)) {
+                mode_.capture_transport_start(now_ms);
+            } else {
+                mode_.capture_transport_stop();
+            }
+        }
         ui_dirty_ = true;
+    }
+
+    if (fn_edge(kBtnRest)) {
+        if (state_.runtime.screen_mode == ScreenMode::Edit) {
+            auto& ed = state_.editor;
+            if (fn_pressed(kBtnShift)) {
+                // Shift+Rest clears the whole visible 16-step page.
+                editor_erase_page();
+            } else if (ed.field == 0) {
+                // Rest in NOTE focus restores the ORIGINAL note of the current
+                // step (undo the pitch change) instead of erasing — when the
+                // step has an origin recorded.
+                const uint8_t idx =
+                    std::min<uint8_t>(ed.selected, kStepCountMax - 1);
+                const int16_t orig = ed.prev_notes[idx];
+                if (orig >= 0) {
+                    Step& s = state_.active_pattern().steps[idx];
+                    s.notes[0] = static_cast<uint8_t>(orig);
+                    if (orig == 0) {
+                        // The step was empty originally -> back to a rest.
+                        s.note_count = 0;
+                        s.active = false;
+                    }
+                    ed.prev_notes[idx] = -1;  // undo consumed
+                    ed.prev_note = -1;
+                } else {
+                    editor_erase_step();
+                }
+            } else {
+                // Rest without a NOTE undo context erases the focused step.
+                editor_erase_step();
+            }
+        }
     }
 
     // Live-mute is a "hold Rest while playing" behaviour: the output is muted
@@ -257,11 +328,37 @@ void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
             if (!note_held_[i]) {
                 note_held_[i] = true;
                 if (!state_.runtime.test_mode) {
-                    mode_.note_on(i, button_to_note(i), now_ms);
-                    // A RandomNote key press starts the loop without the Play
-                    // button, so reflect that transport in the status dial.
-                    if (state_.runtime.mode == PlayMode::RandomNote && mode_.random_loop_running()) {
-                        state_.runtime.playing = true;
+                    // In the EDIT screen a held Shift turns the 16 note keys
+                    // into HOTKEYS (copy/paste/undo/redo/dup) instead of note
+                    // entry. Without Shift a note key assigns a pitch as usual.
+                    if (state_.runtime.screen_mode == ScreenMode::Edit &&
+                        fn_pressed(kBtnShift)) {
+                        editor_shortcut(i, now_ms);
+                    } else if (state_.runtime.screen_mode == ScreenMode::Edit) {
+                        // Note-key step write is an undoable single-step batch.
+                        const int idx = std::min<int>(
+                            state_.runtime.current_step, kStepCountMax - 1);
+                        Step old = state_.active_pattern().steps[idx];
+                        const int16_t old_prev = state_.editor.prev_notes[idx];
+                        mode_.note_on(i, button_to_note(i), now_ms);
+                        const auto& ns = state_.active_pattern().steps[idx];
+                        const bool changed =
+                            !(old.active == ns.active &&
+                              old.notes[0] == ns.notes[0] &&
+                              old.note_count == ns.note_count &&
+                              old.len_div == ns.len_div && old.tie == ns.tie);
+                        if (changed) {
+                            ed_undo_begin();
+                            ed_undo_record(static_cast<uint8_t>(idx), old, old_prev);
+                        }
+                    } else {
+                        mode_.note_on(i, button_to_note(i), now_ms);
+                        // A RandomNote key press starts the loop without the
+                        // Play button, so reflect transport in the status dial.
+                        if (state_.runtime.mode == PlayMode::RandomNote &&
+                            mode_.random_loop_running()) {
+                            state_.runtime.playing = true;
+                        }
                     }
                 }
                 ui_dirty_ = true;
@@ -325,17 +422,28 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
     }
     if (!btn && joy_btn_prev_) {
         if (!joy_btn_long_) {
-            // Rest + click resets the current value (QUICK cell or DETAIL/MAIN
-            // item) to its last accepted value. Otherwise a double-click in
-            // DETAIL/MAIN is the alternative reset, and a plain click is a
-            // normal confirm/edit action.
-            if (fn_pressed(kBtnRest)) {
-                menu_.reset_value();
-            } else if (menu_.editing_value_item() &&
-                       (now_ms - joy_btn_last_click_ms_) < state_.runtime.click.double_ms) {
-                menu_.reset_value();
+            if (state_.runtime.screen_mode == ScreenMode::Edit) {
+                // Editor click: plain click SELECTS the step under the cursor
+                // (so note keys assign to it) and cycles the focused field;
+                // Rest+click erases the focused step.
+                if (fn_pressed(kBtnRest)) {
+                    editor_erase_step();
+                } else {
+                    editor_cycle_field();  // also selects the cursor step
+                }
             } else {
-                menu_.press_short();
+                // Rest + click resets the current value (QUICK cell or
+                // DETAIL/MAIN item). Otherwise a double-click in DETAIL/MAIN is
+                // the alternative reset, and a plain click is a normal
+                // confirm/edit action.
+                if (fn_pressed(kBtnRest)) {
+                    menu_.reset_value();
+                } else if (menu_.editing_value_item() &&
+                           (now_ms - joy_btn_last_click_ms_) < state_.runtime.click.double_ms) {
+                    menu_.reset_value();
+                } else {
+                    menu_.press_short();
+                }
             }
             joy_btn_last_click_ms_ = now_ms;
             ui_dirty_ = true;
@@ -375,11 +483,17 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
         if ((now_ms - last_joy_tilt_ms_) >= interval) {
             last_joy_tilt_ms_ = now_ms;
             const bool shift = fn_pressed(kBtnShift);
-            for (uint32_t k = 0; k < taps; ++k) {
-                if (menu_.editing_radial()) {
-                    menu_.radial_select(direction_to_zone(dir));
-                } else {
-                    menu_.tilt(dir, shift);
+            if (state_.runtime.screen_mode == ScreenMode::Edit) {
+                for (uint32_t k = 0; k < taps; ++k) {
+                    editor_tilt(dir, shift);
+                }
+            } else {
+                for (uint32_t k = 0; k < taps; ++k) {
+                    if (menu_.editing_radial()) {
+                        menu_.radial_select(direction_to_zone(dir));
+                    } else {
+                        menu_.tilt(dir, shift);
+                    }
                 }
             }
             ui_dirty_ = true;
@@ -484,6 +598,415 @@ void AppLoop::update_midi_clock(uint32_t now_ms) {
         // the host and device share one USB bus, so silence means the master
         // stopped sending; Stop usually arrives first in that case.
         return;
+    }
+}
+
+// -- Pattern editor input (ScreenMode::Edit) ---------------------------------
+void AppLoop::editor_move(int delta) {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    // cur is an ABSOLUTE step index; the page is always cur/16. Moving simply
+    // increments/decrements the absolute index and wraps over the loop, so
+    // page transitions (16->17, 17->16) happen automatically and stepping off
+    // either end of the loop wraps (16-step loop: 16->1 when tilting right,
+    // 1->16 when tilting left).
+    int nc = static_cast<int>(ed.cur) + delta;
+    if (nc < 0) {
+        nc = len - 1;              // left of step 1 -> wrap to last step
+    } else if (nc >= len) {
+        nc = 0;                    // right of last step -> wrap to step 1
+    }
+    ed.cur = static_cast<uint8_t>(nc);
+    ed.page = static_cast<uint8_t>(static_cast<int>(ed.cur) / 16);
+    state_.runtime.current_step = ed.cur;
+}
+
+
+
+void AppLoop::editor_tilt(Direction dir, bool shift) {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    Step& s = p.steps[std::min<int>(ed.cur, kStepCountMax - 1)];
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+
+    if (dir == Direction::Left || dir == Direction::Right) {
+        const int d = (dir == Direction::Right) ? 1 : -1;
+        if (shift && ed.field != 3) {
+            // Shift+tilt flips the visible 16-step page while keeping the
+            // cursor column: jump a full page of steps (wrapped over the
+            // loop, so page/page are recomputed consistently).
+            editor_move(d * 16);
+        } else if (ed.field == 3) {
+            // Focused PLEN: pattern length in doubling steps; shrinking
+            // clears everything past the new end.
+            int idx = 2;
+            for (int i = 0; i < 5; ++i) {
+                if (kPatternLens[i] == len) { idx = i; break; }
+            }
+            idx = std::clamp(idx + d, 0, 4);
+            const int new_len = static_cast<int>(kPatternLens[idx]);
+            if (new_len != len) {
+                ed_undo_begin();
+                for (int i = new_len; i < kStepCountMax; ++i) {
+                    Step old = p.steps[i];
+                    const int16_t old_prev = ed.prev_notes[i];
+                    auto& st = p.steps[i];
+                    st.notes[0] = 0;
+                    st.note_count = 0;
+                    st.active = false;
+                    ed.prev_notes[i] = -1;  // trimmed steps lose their original
+                    ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
+                }
+                p.length = static_cast<uint8_t>(new_len);
+                // Clamp the cursor/selection back into the shortened loop.
+                if (static_cast<int>(ed.cur) >= new_len) {
+                    ed.cur = static_cast<uint8_t>(new_len - 1);
+                }
+                if (static_cast<int>(ed.selected) >= new_len) {
+                    ed.selected = ed.cur;
+                }
+                ed.page = static_cast<uint8_t>(static_cast<int>(ed.cur) / 16);
+                state_.runtime.current_step = ed.cur;
+            }
+        } else {
+            editor_move(d);
+        }
+        return;
+    }
+
+    const int delta = (dir == Direction::Up) ? 1 : -1;
+    switch (ed.field) {
+        case 0: {  // NOTE: chromatic pitch, Shift = octave ±12
+            const int base = s.active && s.note_count > 0 ? s.notes[0]
+                                                          : static_cast<int>(60);
+            const uint8_t cidx = std::min<uint8_t>(ed.cur, kStepCountMax - 1);
+            Step old = s;
+            const int16_t old_prev = ed.prev_notes[cidx];
+            // Latch the step's ORIGINAL note the first time it is touched so
+            // it can be restored (Rest) and shown as the +/- direction.
+            if (ed.prev_notes[cidx] < 0) {
+                ed.prev_notes[cidx] = static_cast<int16_t>(s.notes[0]);
+            }
+            ed.prev_note = ed.prev_notes[cidx];
+            const int stp = shift ? 12 : 1;
+            const int v = std::clamp<int>(base + delta * stp,
+                                          kNoteRangeMin, kNoteRangeMax);
+            s.notes[0] = static_cast<uint8_t>(v);
+            s.note_count = 1;
+            s.active = true;
+            ui_dirty_ = true;
+            ed_undo_begin();
+            ed_undo_record(cidx, old, old_prev);
+            break;
+        }
+        case 1: {  // LEN: cycle the visible divisions
+            const bool tr = p.random.len_triplets;
+            int pos = note_len_div_pos(s.len_div, tr);
+            pos = std::clamp<int>(pos + delta, 0, note_len_div_count(tr) - 1);
+            const uint8_t cidx = std::min<uint8_t>(ed.cur, kStepCountMax - 1);
+            Step old = s;
+            const int16_t old_prev = ed.prev_notes[cidx];
+            s.len_div = note_len_div_real(pos, tr);
+            ed_undo_begin();
+            ed_undo_record(cidx, old, old_prev);
+            break;
+        }
+        case 2: {  // ON: toggle rest/note
+            const uint8_t cidx = std::min<uint8_t>(ed.cur, kStepCountMax - 1);
+            Step old = s;
+            const int16_t old_prev = ed.prev_notes[cidx];
+            s.active = !s.active;
+            s.note_count = s.active ? 1 : 0;
+            ed_undo_begin();
+            ed_undo_record(cidx, old, old_prev);
+            break;
+        }
+        default:
+            break;  // PLEN handled above via left/right
+    }
+}
+
+void AppLoop::editor_cycle_field() {
+    auto& ed = state_.editor;
+    auto& f = ed.field;
+    f = static_cast<uint8_t>((f + 1) % 4);
+    // Selecting happens on the step under the cursor; note keys then assign
+    // to this step while the pointer just navigates. Also snap the cursor to
+    // the selected step's page so the selection stays in view. A click either
+    // selects a NEW step or cycles off NOTE — in both cases it's a confirmed
+    // transition, so the pitch-undo context starts fresh (prev_note reset).
+    ed.selected = ed.cur;
+    ed.has_selected = true;
+    // Carry the selected step's ORIGINAL note forward so Rest can still undo
+    // and the +/- direction stays correct when the user re-visits the step.
+    ed.prev_note = ed.prev_notes[std::min<std::size_t>(ed.selected, kStepCountMax - 1)];
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    ed.page = static_cast<uint8_t>(static_cast<int>(ed.selected) / 16);
+    if (static_cast<int>(ed.page) * 16 >= len) {
+        ed.page = static_cast<uint8_t>(std::max(0, (len + 15) / 16 - 1));
+    }
+}
+
+void AppLoop::editor_erase_step() {
+    auto& ed = state_.editor;
+    const uint8_t idx = std::min<uint8_t>(ed.cur, kStepCountMax - 1);
+    Step old = state_.active_pattern().steps[idx];
+    const int16_t old_prev = ed.prev_notes[idx];
+    Step& s = state_.active_pattern().steps[idx];
+    s.active = false;
+    s.note_count = 0;
+    s.notes[0] = 0;
+    ed.prev_notes[idx] = -1;  // erased -> no original to restore
+    // Revertible as one undoable unit (Rest on a step without a NOTE context).
+    ed_undo_begin();
+    ed_undo_record(idx, old, old_prev);
+}
+
+void AppLoop::editor_erase_page() {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    const int start = static_cast<int>(ed.page) * 16;
+    const int end = std::min(start + 16, len);
+    ed_undo_begin();
+    for (int i = start; i < end; ++i) {
+        Step old = p.steps[i];
+        const int16_t old_prev = ed.prev_notes[i];
+        auto& s = p.steps[i];
+        s.active = false;
+        s.note_count = 0;
+        s.notes[0] = 0;
+        ed.prev_notes[i] = -1;
+        ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
+    }
+}
+
+void AppLoop::set_hint(uint8_t value, uint32_t now_ms) {
+    auto& ed = state_.editor;
+    ed.hint = value;
+    ed.hint_until_ms = now_ms + kHintMs;
+}
+
+void AppLoop::ed_undo_begin() {
+    auto& ed = state_.editor;
+    // A brand-new edit invalidates the redo path.
+    ed.redo_size = 0;
+    ed.redo_marks_count = 0;
+    ed.undo_len_before = state_.active_pattern().length;
+    if (ed.undo_marks_count < kUndoMarksMax) {
+        ed.undo_marks[ed.undo_marks_count++] = ed.undo_size;
+    }
+}
+
+void AppLoop::ed_undo_record(uint8_t index, const Step& old_step,
+                             int16_t old_prev) {
+    auto& ed = state_.editor;
+    if (ed.undo_size >= kUndoDepth) {
+        // Log full: drop the oldest batch so a fresh command always fits.
+        // The oldest batch is undo_buf[marks[0] .. next_boundary); every
+        // remaining mark and entry shifts left by the dropped length.
+        if (ed.undo_marks_count > 0) {
+            const uint8_t end_first = (ed.undo_marks_count >= 2)
+                                          ? ed.undo_marks[1]
+                                          : ed.undo_size;
+            const uint8_t drop = static_cast<uint8_t>(
+                end_first - ed.undo_marks[0]);
+            if (drop > 0) {
+                std::move(&ed.undo_buf[end_first], &ed.undo_buf[ed.undo_size],
+                          &ed.undo_buf[0]);
+                ed.undo_size = static_cast<uint8_t>(ed.undo_size - drop);
+            }
+            for (uint8_t m = 1; m < ed.undo_marks_count; ++m) {
+                const uint8_t v = ed.undo_marks[m];
+                ed.undo_marks[m - 1] = static_cast<uint8_t>(
+                    v >= end_first ? v - drop : 0);
+            }
+            ed.undo_marks_count = static_cast<uint8_t>(ed.undo_marks_count - 1);
+            if (ed.undo_size >= kUndoDepth) {
+                return;  // still no room; ignore this tiny record
+            }
+        } else {
+            return;
+        }
+    }
+    auto& e = ed.undo_buf[ed.undo_size++];
+    e.index = index;
+    e.old_step = old_step;
+    e.new_step = state_.active_pattern().steps[index];
+    e.old_prev = old_prev;
+    e.new_prev = ed.prev_notes[index];
+    e.len_before = ed.undo_len_before;
+    e.len_after = state_.active_pattern().length;
+}
+
+bool AppLoop::ed_undo() {
+    auto& ed = state_.editor;
+    if (ed.undo_marks_count == 0 || ed.undo_size == 0) {
+        return false;
+    }
+    const uint8_t m = ed.undo_marks[ed.undo_marks_count - 1];
+    const uint8_t batch_len = static_cast<uint8_t>(ed.undo_size - m);
+    const uint8_t redo_start = ed.redo_size;  // where this batch lands on redo
+    for (uint8_t i = 0; i < batch_len; ++i) {
+        ed.redo_buf[redo_start + i] = ed.undo_buf[m + i];
+    }
+    ed.redo_size = static_cast<uint8_t>(redo_start + batch_len);
+    if (ed.redo_marks_count < kUndoMarksMax) {
+        ed.redo_marks[ed.redo_marks_count++] = redo_start;
+    }
+    // Apply the OLD state and restore per-step originals + loop length.
+    Pattern& p = state_.active_pattern();
+    for (uint8_t i = 0; i < batch_len; ++i) {
+        const auto& e = ed.undo_buf[m + i];
+        p.steps[e.index] = e.old_step;
+        ed.prev_notes[e.index] = e.old_prev;
+        p.length = e.len_before;  // last entry in the batch sets the length
+    }
+    ed.undo_size = m;
+    ed.undo_marks_count = static_cast<uint8_t>(ed.undo_marks_count - 1);
+    // Move the cursor to the first affected step for visibility.
+    if (batch_len > 0) {
+        const auto& first = ed.undo_buf[m];
+        ed.cur = ed.selected = first.index;
+        state_.runtime.current_step = first.index;
+        ed.page = static_cast<uint8_t>(first.index / 16);
+    }
+    return true;
+}
+
+bool AppLoop::ed_redo() {
+    auto& ed = state_.editor;
+    if (ed.redo_marks_count == 0 || ed.redo_size == 0) {
+        return false;
+    }
+    const uint8_t m = ed.redo_marks[ed.redo_marks_count - 1];
+    const uint8_t batch_len = static_cast<uint8_t>(ed.redo_size - m);
+    const uint8_t undo_start = ed.undo_size;  // where this batch lands on undo
+    for (uint8_t i = 0; i < batch_len; ++i) {
+        ed.undo_buf[undo_start + i] = ed.redo_buf[m + i];
+    }
+    ed.undo_size = static_cast<uint8_t>(undo_start + batch_len);
+    if (ed.undo_marks_count < kUndoMarksMax) {
+        ed.undo_marks[ed.undo_marks_count++] = undo_start;
+    }
+    Pattern& p = state_.active_pattern();
+    for (uint8_t i = 0; i < batch_len; ++i) {
+        const auto& e = ed.redo_buf[m + i];
+        p.steps[e.index] = e.new_step;
+        ed.prev_notes[e.index] = e.new_prev;
+        p.length = e.len_after;  // last entry in the batch sets the length
+    }
+    ed.redo_size = m;
+    ed.redo_marks_count = static_cast<uint8_t>(ed.redo_marks_count - 1);
+    if (batch_len > 0) {
+        const auto& first = ed.redo_buf[m];
+        ed.cur = ed.selected = first.index;
+        state_.runtime.current_step = first.index;
+        ed.page = static_cast<uint8_t>(first.index / 16);
+    }
+    return true;
+}
+
+void AppLoop::editor_shortcut(uint8_t key, uint32_t now_ms) {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const std::size_t len =
+        std::max<std::size_t>(1, std::min<std::size_t>(p.length, kStepCountMax));
+    const std::size_t page_len = std::min<std::size_t>(
+        16, len - static_cast<std::size_t>(ed.page) * 16);
+    const std::size_t start = static_cast<std::size_t>(ed.page) * 16;
+
+    switch (key) {
+        case kKeyCopy: {
+            ed.clip_len = 0;
+            for (std::size_t i = 0; i < page_len; ++i) {
+                ed.clip[i] = p.steps[start + i];
+            }
+            ed.clip_len = static_cast<uint8_t>(page_len);
+            ed.clip_anchor = static_cast<uint8_t>(start);
+            set_hint(kHintCopy, now_ms);
+            break;
+        }
+        case kKeyPaste: {
+            ed_undo_begin();
+            for (uint8_t k = 0; k < ed.clip_len; ++k) {
+                const std::size_t idx = start + k;
+                if (idx >= len) {
+                    break;
+                }
+                const Step old = p.steps[idx];
+                const int16_t old_prev = ed.prev_notes[idx];
+                // Paste clobbers the target step; remember its current note as
+                // the "original" until undo clears it, so +/- mirrors the paste.
+                if (ed.prev_notes[idx] < 0) {
+                    ed.prev_notes[idx] = static_cast<int16_t>(p.steps[idx].notes[0]);
+                }
+                p.steps[idx] = ed.clip[k];
+                ed_undo_record(static_cast<uint8_t>(idx), old, old_prev);
+            }
+            set_hint(kHintPaste, now_ms);
+            break;
+        }
+        case kKeyDup: {
+            // Duplicate (copy + paste at once): grab the current page into the
+            // clipboard and append it onto the page AFTER this one. Growing
+            // the loop length to keep the copy in the pattern is undoable.
+            for (std::size_t i = 0; i < page_len; ++i) {
+                ed.clip[i] = p.steps[start + i];
+            }
+            ed.clip_len = static_cast<uint8_t>(page_len);
+            const std::size_t dst = start + 16;  // one page further on
+            if (dst >= kStepCountMax) {
+                break;  // no room to duplicate
+            }
+            const std::size_t need =
+                dst + static_cast<std::size_t>(ed.clip_len);
+            std::size_t new_len = len;
+            for (int kIndex = 0; kIndex < 5; ++kIndex) {
+                if (static_cast<std::size_t>(kPatternLens[kIndex]) >= need) {
+                    new_len = static_cast<std::size_t>(kPatternLens[kIndex]);
+                    break;
+                }
+            }
+            if (new_len > kStepCountMax) {
+                new_len = kStepCountMax;
+            }
+            ed_undo_begin();
+            if (new_len > len) {
+                p.length = static_cast<uint8_t>(new_len);  // captured as len_after
+            }
+            for (uint8_t k = 0; k < ed.clip_len; ++k) {
+                const std::size_t idx = dst + k;
+                if (idx >= kStepCountMax) {
+                    break;
+                }
+                const Step old = p.steps[idx];
+                const int16_t old_prev = ed.prev_notes[idx];
+                if (ed.prev_notes[idx] < 0) {
+                    ed.prev_notes[idx] = static_cast<int16_t>(p.steps[idx].notes[0]);
+                }
+                p.steps[idx] = ed.clip[k];
+                ed_undo_record(static_cast<uint8_t>(idx), old, old_prev);
+            }
+            set_hint(kHintDup, now_ms);
+            break;
+        }
+        case kKeyUndo: {
+            if (ed_undo()) {
+                set_hint(kHintUndo, now_ms);
+            }
+            break;
+        }
+        case kKeyRedo: {
+            if (ed_redo()) {
+                set_hint(kHintRedo, now_ms);
+            }
+            break;
+        }
+        default:
+            break;
     }
 }
 
@@ -636,12 +1159,33 @@ void AppLoop::update_beat(uint32_t now_ms) {
             ui_dirty_ = true;
         }
 
+        // The edit cursor, the step that accepts note keys and the playback
+        // playhead are ONE object while the editor is on screen: they all live
+        // at `runtime.current_step`. When Play advances (or note keys place a
+        // note) the marker moves with the playhead; when it stops, editing
+        // resumes at exactly the step where it stopped.
+        if (state_.runtime.screen_mode == ScreenMode::Edit) {
+            auto& ed = state_.editor;
+            const uint8_t st = static_cast<uint8_t>(std::min<int>(
+                state_.runtime.current_step, kStepCountMax - 1));
+            ed.cur = st;
+            ed.selected = st;
+            ed.has_selected = true;
+            ed.page = static_cast<uint8_t>(st / 16);
+            // Expire the transient hotkey confirmation.
+            if (ed.hint != kHintNone && now_ms >= ed.hint_until_ms) {
+                ed.hint = kHintNone;
+                ui_dirty_ = true;
+            }
+        }
+
         // The QUICK row set depends on the play mode; when it changes (via the
         // Mode cell) rebuild the menu and silence anything still sounding.
         if (state_.runtime.mode != last_mode_) {
             mode_.all_notes_off();
             mode_.random_loop_stop();
             mode_.gen_stop();
+            mode_.capture_transport_stop();
             menu_.rebuild();
             last_mode_ = state_.runtime.mode;
             ui_dirty_ = true;

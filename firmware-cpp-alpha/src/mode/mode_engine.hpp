@@ -46,6 +46,21 @@ public:
     void gen_stop();
     bool gen_running() const { return gen_playing_; }
 
+    // Pattern (PTRN slot) transport: grid playback of the recorded/generated
+    // steps + note capture while runtime.recording is set.
+    void pattern_toggle(uint32_t now_ms);   // Play: start/stop the loop
+    void pattern_start(uint32_t now_ms);
+    void pattern_stop();
+    bool pattern_running() const { return ptn_playing_; }
+    // Record one note into the active slot at the quantised play position.
+    // force_div >= 0 pins the LEN division (RND events); otherwise the KB
+    // release measurement fills it. Returns the captured step index.
+    int16_t pattern_capture(uint8_t note, uint32_t now_ms, int8_t force_div = -1);
+    void capture_rnd_note(uint8_t note, uint8_t div, uint32_t now_ms);
+    // Silent capture transport for recording RND output outside PTRN mode.
+    void capture_transport_start(uint32_t now_ms);
+    void capture_transport_stop();
+
     // Polled by the main loop: true when the live note label should be
     // repainted although no physical input happened (arp step advance,
     // random transitions). Take-and-clear semantics.
@@ -134,6 +149,21 @@ private:
     uint8_t gen_anchor_ {60};
     uint8_t gen_last_note_ {0};    // sounding event note (for chained offs)
     uint32_t gen_next_ms_ {0};
+
+    // Pattern (PTRN slot) transport + capture state.
+    void pattern_advance(uint32_t now_ms);
+    uint32_t pattern_step_ms() const;
+    bool ptn_playing_ {false};
+    bool capture_only_ {false};    // silent transport while recording RND output
+    uint8_t ptn_pos_ {0};
+    uint32_t ptn_anchor_ms_ {0};   // grid t0 for record quantisation
+    uint32_t ptn_next_ms_ {0};
+    uint8_t ptn_last_note_ {0};
+    // KB recording: pending press waiting for release to measure the duration.
+    bool cap_pending_[kMaxHeldKeys] {};
+    uint8_t cap_note_[kMaxHeldKeys] {};
+    uint8_t cap_step_[kMaxHeldKeys] {};
+    uint32_t cap_start_ms_[kMaxHeldKeys] {};
 
     // Set whenever the note readout changed outside of input handling.
     bool ui_repaint_ {false};

@@ -352,6 +352,188 @@ void draw_seg_range_band(DisplaySh1106& d, const Segment& s, int y, bool focused
     d.fill_rect(x, y + 7, w, focused ? 2 : 1, true);
 }
 
+// Pattern editor screen (ScreenMode::Edit): a piano-roll of the visible page
+// (16 steps across the full width) with auto-scaled pitch rows, plus a single
+// detail line: STEP, NOTE, LEN, ON and the pattern length (PLEN).
+void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
+    const Pattern& p = state.active_pattern();
+    const PtnEditorUI& ed = state.editor;
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    const int page_len =
+        std::min(16, len - static_cast<int>(ed.page) * 16);
+    char buf[kMaxCols + 1];
+
+    // -- Pitch axis auto-scale: only the rows actually used by the pattern are
+    // visible; the window grows when a new note appears outside it.
+    int lo = 127;
+    int hi = 0;
+    bool any = false;
+    for (int i = 0; i < len; ++i) {
+        const Step& st = p.steps[i];
+        if (st.active && st.note_count > 0) {
+            any = true;
+            lo = std::min(lo, static_cast<int>(st.notes[0]));
+            hi = std::max(hi, static_cast<int>(st.notes[0]));
+        }
+    }
+    if (!any) {
+        lo = 55;
+        hi = 67;  // empty pattern: a one-octave window around C4
+    }
+    lo -= 1;
+    hi += 1;
+    const int span = std::max(1, hi - lo);
+
+    // -- Roll geometry: 8 px per step x 16 columns = full display width.
+    const int col_w = DisplaySh1106::kWidth / 16;   // 8
+    const int roll_top = kContentY + 1;
+    const int roll_h = 36;  // taller note area; detail line still fits at row 62
+    const int floor_y = roll_top + roll_h - 1;
+
+    // Beat grid: faint ticks every 4 steps, stronger on page starts.
+    for (int c = 0; c < page_len; ++c) {
+        const int gx = c * col_w;
+        if ((ed.page * 16 + c) % 4 == 0) {
+            d.fill_rect(gx, floor_y - 3, 1, 3, true);
+        }
+    }
+    // Floor line.
+    d.fill_rect(0, floor_y, page_len * col_w, 1, true);
+
+    // Notes: a dot at the pitch row (relative position preserved), with a
+    // short duration tail to the right proportional to the LEN division. Kept
+    // as pure dots/blocks so no vertical bars ever cover the note field.
+    for (int c = 0; c < page_len; ++c) {
+        const Step& s = p.steps[ed.page * 16 + c];
+        if (!s.active || s.note_count == 0) {
+            continue;
+        }
+        const int rel = std::clamp(static_cast<int>(s.notes[0]) - lo, 0, span);
+        const int y = roll_top + (span - rel) * (roll_h - 2) / span;
+        const int x = c * col_w + 2;
+        // Note head: 3x3 block (readable at a glance).
+        d.fill_rect(x, y - 1, 3, 3, true);
+        // Duration tail inside the column (division index scales it).
+        const int tail = std::min(col_w - 3,
+                                  1 + static_cast<int>(s.len_div) / 2);
+        if (tail > 1) {
+            d.fill_rect(x + 3, y, tail, 1, true);
+        }
+    }
+
+    // Cursor: a small tick on the top edge and a dot under the floor line —
+    // nothing covering the note rows themselves. This column is ALSO the
+    // playback/playhead column (see below), so there is a single unified
+    // "current step" marker; editing happens exactly where playback stops.
+    {
+        const int cx = std::min<int>(ed.cur % 16, page_len - 1) * col_w;
+        d.fill_rect(cx, roll_top - 1, col_w, 2, true);   // top tick
+        d.fill_rect(cx + col_w / 2 - 1, floor_y + 1, 2, 1, true); // under-dot
+    }
+    // Playback: a thin vertical bar on the left edge of the current column
+    // sweeps across the roll as the loop advances (Play started it). This is
+    // the same column as the cursor: when Play stops the bar freezes on the
+    // editable step, so the playhead, the cursor and the edit target are one.
+    {
+        int bar_step =
+            std::min<int>(state.runtime.current_step, len - 1);
+        if (static_cast<int>(bar_step / 16) != static_cast<int>(ed.page)) {
+            bar_step = static_cast<int>(ed.page) * 16;
+        }
+        const int bx = (bar_step % 16) * col_w;
+        d.fill_rect(bx, roll_top, 1, roll_h, true);  // moving vertical marker
+    }
+
+
+
+    // -- Detail line: STEP NOTE LEN ON PLEN(page) ----------------------------
+    const Step& s = p.steps[std::min<int>(ed.cur, kStepCountMax - 1)];
+    const int dy = floor_y + 10;
+    const bool is_on = s.active && s.note_count > 0;
+
+    auto field_box = [&](int x, int w, const char* text, bool active_field) {
+        if (active_field) {
+            d.fill_rect(x, dy - 9, w, kRowH, true);
+            d.draw_text_px(text, x + kCellPad, dy - 8, false);
+        } else {
+            d.draw_text(text, x + kCellPad, dy - 8);
+        }
+    };
+
+    snprintf(buf, sizeof(buf), "S%02d", ed.page * 16 + std::min<int>(ed.cur % 16, page_len - 1) + 1);
+    field_box(0, 26, buf, false);
+
+    char note_buf[8];       // "C4", "F#3", "---" (no +/- sign inside)
+    if (is_on) {
+        snprintf(note_buf, sizeof(note_buf), "%s%d",
+                 midi_note_glyph(s.notes[0]), midi_note_octave(s.notes[0]));
+    } else {
+        snprintf(note_buf, sizeof(note_buf), "---");
+    }
+    // The NOTE name is always drawn at the SAME position (field x + pad). The
+    // direction signs occupy reserved slots that never move the name: "-" in
+    // the slot LEFT of the name when the note went LOWER, "+" in the slot
+    // RIGHT when it went HIGHER. The name itself stays in one column whether
+    // or not a sign (or a "#" in the name) is present. The status sign stays
+    // visible until the change is confirmed (click) or undone (Rest).
+    const int note_x = 28;
+    const int note_pad_x = note_x + kCellPad;
+    const bool note_focused = (ed.field == 0);
+    const int16_t orig =
+        ed.prev_notes[std::min<std::size_t>(ed.cur, kStepCountMax - 1)];
+    const bool pitch_pending = is_on && orig >= 0 &&
+                               static_cast<int>(s.notes[0]) != orig;
+    if (note_focused) {
+        d.fill_rect(note_x, dy - 9, 34, kRowH, true);
+        d.draw_text_px(note_buf, note_pad_x, dy - 8, false);
+    } else {
+        d.draw_text(note_buf, note_pad_x, dy - 8);
+    }
+    if (pitch_pending) {
+        if (static_cast<int>(s.notes[0]) > orig) {
+            d.draw_text("+", note_pad_x +
+                        static_cast<int>(std::strlen(note_buf)) *
+                            DisplaySh1106::kTextAdvance, dy - 8);
+        } else {
+            d.draw_text("-", note_x, dy - 8);
+        }
+    }
+
+    snprintf(buf, sizeof(buf), "L%s",
+             kNoteLenDivs[std::min<uint8_t>(s.len_div, kNoteLenDivCount - 1)]);
+    field_box(62, 24, buf, ed.field == 1);
+
+    field_box(88, 20, is_on ? "ON" : "OFF", ed.field == 2);
+
+    snprintf(buf, sizeof(buf), "P%d", static_cast<int>(p.length));
+    field_box(110, 20, buf, ed.field == 3);
+
+    // Page indicator (only when the loop spans more than one page).
+    const int pages = (len + 15) / 16;
+    if (pages > 1) {
+        snprintf(buf, sizeof(buf), "%d/%d",
+                 static_cast<int>(ed.page) + 1, pages);
+        d.draw_text(buf, DisplaySh1106::kWidth - 18, roll_top - 9);
+    }
+    // Transient hotkey confirmation ("COPY"/"PASTE"/"UNDO"/"REDO"/"DUP").
+    // Drawn at the very BOTTOM row — the top line is reserved for the device
+    // parameters, so a Shift+note shortcut shows below the editor instead.
+    if (ed.hint != kHintNone) {
+        const char* label = "";
+        switch (ed.hint) {
+            case kHintCopy:   label = "COPY"; break;
+            case kHintPaste:  label = "PAST"; break;
+            case kHintUndo:   label = "UNDO"; break;
+            case kHintRedo:   label = "REDO"; break;
+            case kHintDup:    label = "DUP";  break;
+            default: break;
+        }
+        if (*label) {
+            d.draw_text(label, 0, DisplaySh1106::kHeight - 10);
+        }
+    }
+}
+
 }  // namespace
 
 void draw_test_screen(const AppState& state, DisplaySh1106& d) {
@@ -492,6 +674,11 @@ void MenuRenderer::render(const AppState& state, const MenuEngine& engine) {
 
     if (state.runtime.screen_mode == ScreenMode::Animation) {
         animation_.render(*display_);
+        return;
+    }
+
+    if (state.runtime.screen_mode == ScreenMode::Edit) {
+        draw_pattern_editor(state, *display_);
         return;
     }
 

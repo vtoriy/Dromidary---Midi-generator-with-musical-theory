@@ -36,6 +36,7 @@ enum class PlayMode : uint8_t {
 enum class ScreenMode : uint8_t {
     Quick = 0,
     Full,
+    Edit,       // pattern editor (grid view + step detail)
     Animation,
 };
 
@@ -148,7 +149,10 @@ struct Step {
     uint8_t note_count {0};
     bool active {false};
     bool tie {false};
-    uint8_t length_steps {4};
+    // Gate length as an index into kNoteLenDivs (1/128..'4). Onsets live on
+    // the pattern grid (1/16 or 1/64 by Pattern.grid64); the duration itself
+    // is division-exact, so 1/64 notes survive recording.
+    uint8_t len_div {8};
 };
 
 struct KeyFilterCfg {
@@ -225,7 +229,8 @@ struct ClickSettings {
 
 struct Pattern {
     std::array<Step, kStepCountMax> steps {};
-    uint8_t length {16};
+    uint8_t length {16};          // loop length in grid steps (STEP cell: 4..64)
+    bool grid64 {false};          // false = onset grid 1/16 note, true = 1/64 note
     KeyFilterCfg key_filter {};
     ChordCfg chord {};
     ArpCfg arp {};

@@ -37,8 +37,8 @@ gate/ADSR (attack/release), voicing Strum/Roll, генератор случай�
 
 | Область | Статус | Комментарий |
 |---|---|---|
-| Паттерн-режим Pattern (воспроизведение записанного) | ❌ отложено | Step-модель и слоты готовы; нужен планировщик playback + запись |
-| Запись в паттерн (realtime overdub, step-edit) | ❌ отложено | после планировщика playback |
+| Паттерн-режим Pattern (запись по Rec + playback + экран EDIT) | ✅ MVP | моно-шаги, сетка 1/16 (`grid64` → 1/64), длительности — деления LEN; запись клавиш + RND-потока |
+| Запись в паттерн (realtime overdub, step-edit) | 🔶 частично | запись и базовый step-edit в EDIT готовы; overdub-наложение поверх звучащих шагов и copy/paste шагов — дальше |
 | RandomPattern-режим (авто-генерация паттерна) | ✅ MVP | генерация в активный слот по PITCH/LEN/Dens/REP; playback — цепочка длительностей (каждое событие длится свою LEN-долю, onset = конец предыдущего гейта); см. `06-mode-matrix.md` |
 | MIDI Filter (MIDI IN → OUT) | ❌ отложено | требует UART MIDI IN + оптрон |
 | Timing-эффекты (swing/humanize/quantize/legato) | ✅ реализовано | применяются к live-арпеджио (этап 5 `02-midi-chain.md`) |
@@ -73,8 +73,8 @@ OctUp=bit6 («+»), OctDown=bit7 («−»); биты 4–5 не подключе
 3. ~~Live-вывод Strum/Roll с детерминированным таймингом~~ ✅
 4. ~~MIDI Clock sync (master/slave)~~ ✅
 5. ~~RandomPattern MVP (генерация + playback)~~ ✅
-6. Планировщик playback для режима **Pattern** (шаги слота, gate по `length_steps`).
-7. Запись в паттерн: realtime overdub + step-edit.
+6. ~~Паттерн-режим Pattern: запись по Rec, playback, экран EDIT~~ ✅ (MVP)
+7. Доработка редактора: overdub-наложение, copy/paste шагов, полифония.
 8. UART MIDI OUT → MIDI IN + оптрон → режим MidiFilter.
 9. Сохранение паттернов на flash (сериализация struct-модели).
 10. Подключение Shape и Dens к движку генерации.

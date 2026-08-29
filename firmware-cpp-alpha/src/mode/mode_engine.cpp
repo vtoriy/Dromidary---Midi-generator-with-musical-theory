@@ -7,6 +7,10 @@
 
 namespace drom {
 
+// Nearest kNoteLenDivs index for a measured duration in ms (defined below,
+// used by the Pattern-mode note capture).
+static uint8_t nearest_len_div(uint32_t dur_ms, uint16_t bpm);
+
 namespace {
 constexpr int kCapNote = 0xFF;
 
@@ -274,13 +278,62 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
     if (chip_idx >= kMaxHeldKeys) {
         return;
     }
+    // While the pattern editor is on screen ALL note/pattern generation is
+    // blocked: a note key only ASSIGNS the pressed pitch to the step the
+    // cursor/playhead currently sits on. The marker stays on that step so the
+    // +/- direction of the just-written note is visible at once; the step is
+    // advanced by Play (or by moving the cursor). This is routed first so a
+    // RandomNote/RandomPattern loop cannot regenerate while the user edits.
+    if (state_->runtime.screen_mode == ScreenMode::Edit) {
+        auto& ed = state_->editor;
+        Pattern& pat = state_->active_pattern();
+        const uint8_t idx = std::min<uint8_t>(
+            static_cast<uint8_t>(std::min<int>(state_->runtime.current_step,
+                                               kStepCountMax - 1)),
+            kStepCountMax - 1);
+        Step& s = pat.steps[idx];
+        // Remember the step's ORIGINAL note the first time it is edited, as a
+        // reference to draw the +/- direction and to restore (Rest = undo).
+        if (ed.prev_notes[idx] < 0) {
+            ed.prev_notes[idx] = static_cast<int16_t>(s.notes[0]);
+        }
+        ed.prev_note = ed.prev_notes[idx];
+        ed.cur = idx;
+        ed.selected = idx;
+        ed.has_selected = true;
+        s.notes[0] = raw_note;
+        s.note_count = 1;
+        s.active = true;
+        cap_pending_[chip_idx] = true;
+        cap_note_[chip_idx] = raw_note;
+        cap_step_[chip_idx] = idx;
+        cap_start_ms_[chip_idx] = now_ms;
+        ui_repaint_ = true;
+        return;
+    }
+
     const PlayMode mode = state_->runtime.mode;
     if (mode == PlayMode::Pattern) {
-        return;  // note keys ignored (no playback/recording yet)
+        // Recording mode: capture the pressed key (post-filter) at the grid
+        // position and keep monitoring it live until release.
+        bool muted = false;
+        const uint8_t snapped =
+            key_filter_apply(raw_note, state_->active_pattern().key_filter, muted);
+        pattern_capture(snapped, now_ms);
+        cap_pending_[chip_idx] = true;
+        cap_note_[chip_idx] = snapped;
+        cap_step_[chip_idx] = static_cast<uint8_t>(
+            state_->runtime.current_step);
+        cap_start_ms_[chip_idx] = now_ms;
+        if (midi_ != nullptr && !state_->runtime.live_mute) {
+            midi_->note_on(snapped, 100);  // live monitor
+        }
+        return;
     }
 
     const bool latch = latch_enabled();
     const bool arp = arp_enabled();
+
 
     // RandomNote: each pressed key raises the anchor octave of the continuous
     // random generator. The first press (or Play) starts the loop; it keeps
@@ -388,6 +441,12 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
     if (state_ != nullptr) {
         state_->runtime.last_note = set.notes[0];
         state_->runtime.show_note = true;
+        // Live-overdub: while Rec is armed the raw played key is written into
+        // the active slot at the quantised grid position — an empty step gets
+        // the note, an already-filled step is REPLACED by this new one.
+        if (state_->runtime.recording && state_->runtime.mode != PlayMode::Pattern) {
+            pattern_capture(raw_note, now_ms);
+        }
     }
     const uint32_t attack = gate_attack_ms();
     if (p.chord.voicing == VoicingMode::Block) {
@@ -418,6 +477,27 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
 
 void ModeEngine::note_off(uint8_t chip_idx, uint32_t now_ms) {
     if (chip_idx >= kMaxHeldKeys) {
+        return;
+    }
+    if (state_->runtime.mode == PlayMode::Pattern) {
+        // End the monitor note and fix the recorded step's duration from the
+        // measured hold time.
+        if (cap_pending_[chip_idx]) {
+            cap_pending_[chip_idx] = false;
+            const uint32_t held = now_ms - cap_start_ms_[chip_idx];
+            const uint8_t div = nearest_len_div(held, state_->active_pattern().timing.bpm);
+            const uint8_t idx = cap_step_[chip_idx];
+            if (idx < kStepCountMax) {
+                auto& s = state_->active_pattern().steps[idx];
+                if (s.notes[0] == cap_note_[chip_idx]) {
+                    s.len_div = div;
+                }
+            }
+            if (midi_ != nullptr && cap_note_[chip_idx] != 0) {
+                midi_->note_off(cap_note_[chip_idx]);
+            }
+            cap_note_[chip_idx] = 0;
+        }
         return;
     }
     if (latched_[chip_idx]) {
@@ -471,6 +551,18 @@ void ModeEngine::check_config(uint32_t now_ms) {
 void ModeEngine::tick(uint32_t now_ms) {
     process_pending(now_ms);
     check_config(now_ms);
+    // While the pattern editor is on screen, suppress generator advancement:
+    // a running RandomNote/RandomPattern loop must not keep rewriting the slot
+    // the user is editing. PTRN audition playback (started with Play) keeps
+    // running so the loop below advances the playhead.
+    if (state_ != nullptr && state_->runtime.screen_mode == ScreenMode::Edit) {
+        if (random_loop_) {
+            random_loop_stop();
+        }
+        if (gen_playing_) {
+            gen_stop();
+        }
+    }
     if (arp_active_) {
         advance_arp(now_ms);
     }
@@ -488,6 +580,15 @@ void ModeEngine::tick(uint32_t now_ms) {
         gen_advance(now_ms);
     } else if (gen_playing_) {
         gen_stop();
+    }
+    // Pattern transport: grid playback in PTRN mode, silent grid while
+    // recording RND output elsewhere.
+    if (ptn_playing_ && state_ != nullptr) {
+        if (state_->runtime.mode == PlayMode::RandomPattern || capture_only_) {
+            pattern_advance(now_ms);
+        } else {
+            capture_transport_stop();
+        }
     }
 }
 
@@ -532,6 +633,19 @@ void ModeEngine::gen_regenerate(uint8_t anchor) {
     }
     gen_anchor_ = anchor;
     Pattern& p = state_->active_pattern();
+    // Generation overwrites the whole slot: stale notes beyond the loop
+    // length must not survive into the new pattern.
+    for (auto& s : p.steps) {
+        s.notes[0] = 0;
+        s.note_count = 0;
+        s.active = false;
+        s.tie = false;
+        s.len_div = 8;
+    }
+    for (auto& pn : state_->editor.prev_notes) {
+        pn = -1;  // a fresh pattern has no per-step "original" edits
+    }
+    state_->editor.prev_note = -1;
     const RandomCfg& rnd = p.random;
     const bool tr = rnd.len_triplets;
     int vis_lo = note_len_div_pos(rnd.len_min_idx, tr);
@@ -567,7 +681,7 @@ void ModeEngine::gen_regenerate(uint8_t anchor) {
         s.tie = false;
         const int vis =
             vis_lo + static_cast<int>(rng_.range(static_cast<uint32_t>(vis_hi - vis_lo + 1)));
-        s.length_steps = note_len_div_real(vis, tr);  // store the division index
+        s.len_div = note_len_div_real(vis, tr);  // store the division index
     }
 }
 
@@ -646,7 +760,7 @@ void ModeEngine::gen_advance(uint32_t now_ms) {
         return;
     }
     Step& s = p.steps[gen_pos_];
-    const uint32_t dur = note_len_ms(s.length_steps, p.timing.bpm);
+    const uint32_t dur = note_len_ms(s.len_div, p.timing.bpm);
     const uint32_t attack = gate_attack_ms();
     const uint32_t release = gate_release_ms();
     // Gate as a share of the event length (Gate %): 100 keeps the legato
@@ -666,6 +780,172 @@ void ModeEngine::gen_advance(uint32_t now_ms) {
     state_->runtime.current_step = gen_pos_;
     gen_pos_ = static_cast<uint8_t>((gen_pos_ + 1) % events);
     gen_next_ms_ = now_ms + dur;
+    ui_repaint_ = true;
+}
+
+// -- Pattern (PTRN slot) transport + recording capture ------------------------
+
+uint32_t ModeEngine::pattern_step_ms() const {
+    const Pattern& p = state_->active_pattern();
+    float quarter = 60000.0f;
+    float bpm_f = p.timing.bpm;
+    if (bpm_f < 20.0f) { bpm_f = 120.0f; }
+    quarter /= bpm_f;
+    // Grid step: 1/16 note by default, 1/64 with Pattern.grid64.
+    const float step = p.grid64 ? quarter / 16.0f : quarter / 4.0f;
+    return static_cast<uint32_t>(step < 1.0f ? 1.0f : step);
+}
+
+void ModeEngine::pattern_start(uint32_t now_ms) {
+    ptn_playing_ = true;
+    ptn_pos_ = 0;
+    ptn_last_note_ = 0;
+    ptn_anchor_ms_ = now_ms;
+    ptn_next_ms_ = now_ms;
+    state_->runtime.current_step = 0;
+}
+
+void ModeEngine::pattern_stop() {
+    if (!ptn_playing_) {
+        return;
+    }
+    ptn_playing_ = false;
+    clear_pending();
+    if (ptn_last_note_ != 0 && midi_) {
+        midi_->note_off(ptn_last_note_);
+    }
+    ptn_last_note_ = 0;
+    for (auto& c : cap_pending_) {
+        c = false;
+    }
+    ui_repaint_ = true;
+}
+
+void ModeEngine::pattern_toggle(uint32_t now_ms) {
+    if (ptn_playing_) {
+        pattern_stop();
+        state_->runtime.playing = false;
+    } else {
+        pattern_start(now_ms);
+        state_->runtime.playing = true;
+        ui_repaint_ = true;
+    }
+}
+
+void ModeEngine::capture_transport_start(uint32_t now_ms) {
+    // Silent grid transport used to quantise RND output while recording.
+    if (!ptn_playing_) {
+        ptn_playing_ = true;      // timing only; notes fire only in PTRN mode
+        capture_only_ = true;
+        ptn_pos_ = 0;
+        ptn_anchor_ms_ = now_ms;
+        ptn_next_ms_ = now_ms;
+        state_->runtime.current_step = 0;
+    }
+    // Recording does NOT wipe the slot: only the notes the player actually
+    // produces while Rec is armed are written (new steps get the note, filled
+    // steps are replaced). Steps nobody touches are left as they were.
+    ui_repaint_ = true;
+}
+
+void ModeEngine::capture_transport_stop() {
+    if (capture_only_) {
+        capture_only_ = false;
+        ptn_playing_ = false;
+        ptn_pos_ = 0;
+    }
+}
+
+// Nearest kNoteLenDivs index for a measured duration in ms.
+uint8_t nearest_len_div(uint32_t dur_ms, uint16_t bpm) {
+    uint8_t best = 8;
+    uint32_t best_dist = 0xFFFFFFFFu;
+    for (uint8_t i = 0; i < kNoteLenDivCount; ++i) {
+        const uint32_t d = note_len_ms(i, bpm);
+        const uint32_t dist = (d > dur_ms) ? d - dur_ms : dur_ms - d;
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = i;
+        }
+    }
+    return best;
+}
+
+int16_t ModeEngine::pattern_capture(uint8_t note, uint32_t now_ms, int8_t force_div) {
+    if (state_ == nullptr || !state_->runtime.recording || !ptn_playing_) {
+        return -1;
+    }
+    Pattern& p = state_->active_pattern();
+    const uint32_t step_ms = pattern_step_ms();
+    const uint32_t rel = now_ms - ptn_anchor_ms_;
+    // Round to the nearest grid position and wrap over the loop length.
+    uint32_t idx = (rel + step_ms / 2u) / step_ms;
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    idx %= static_cast<uint32_t>(len);
+    Step& s = p.steps[idx];
+    s.notes[0] = note;
+    s.note_count = 1;
+    s.active = true;
+    s.tie = false;
+    if (force_div >= 0) {
+        s.len_div = static_cast<uint8_t>(force_div);
+    }
+    state_->runtime.current_step = static_cast<uint8_t>(idx);
+    ui_repaint_ = true;
+    return static_cast<int16_t>(idx);
+}
+
+void ModeEngine::capture_rnd_note(uint8_t note, uint8_t div, uint32_t now_ms) {
+    if (capture_only_) {
+        (void)pattern_capture(note, now_ms, static_cast<int8_t>(div));
+    }
+}
+
+void ModeEngine::pattern_advance(uint32_t now_ms) {
+    if (midi_ == nullptr || state_ == nullptr) {
+        return;
+    }
+    if (now_ms < ptn_next_ms_) {
+        return;
+    }
+    const bool fire = !capture_only_;
+    Pattern& p = state_->active_pattern();
+    const uint8_t events =
+        static_cast<uint8_t>(std::max<int>(1, std::min<int>(p.length, kStepCountMax)));
+    const uint32_t step_ms = pattern_step_ms();
+    // Swing pushes every odd boundary later by pct of one step.
+    const bool odd = (ptn_pos_ & 1u) != 0u;
+    uint32_t swing = odd
+        ? static_cast<uint32_t>(step_ms * p.timing.swing_pct / 100u)
+        : 0u;
+
+    if (fire) {
+        Step& s = p.steps[ptn_pos_];
+        const uint32_t attack = gate_attack_ms();
+        const uint32_t release = gate_release_ms();
+        if (ptn_last_note_ != 0) {
+            schedule_pending(now_ms + swing + release, ptn_last_note_, false);
+            ptn_last_note_ = 0;
+        }
+        if (s.active && s.note_count > 0 && s.notes[0] != 0) {
+            schedule_pending(now_ms + swing + attack, s.notes[0], true);
+            uint32_t gate = note_len_ms(s.len_div, p.timing.bpm)
+                            * p.random.gate_pct / 100u;
+            if (gate < 1) { gate = 1; }
+            schedule_pending(now_ms + swing + gate + release, s.notes[0], false);
+            ptn_last_note_ = s.notes[0];
+            state_->runtime.last_note = s.notes[0];
+            state_->runtime.show_note = true;
+        } else {
+            state_->runtime.show_note = false;
+        }
+    } else if (odd) {
+        swing = 0;
+    }
+
+    state_->runtime.current_step = ptn_pos_;
+    ptn_pos_ = static_cast<uint8_t>((ptn_pos_ + 1) % events);
+    ptn_next_ms_ = now_ms + (step_ms - swing > 0 ? step_ms - swing : 1u);
     ui_repaint_ = true;
 }
 
@@ -730,6 +1010,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
 
     // Draw the gate length inside the configured LEN span (visible positions
     // honour the triplet filter; storage keeps real table indices).
+    uint8_t drawn_div = 8;
     {
         const bool tr = rnd.len_triplets;
         int vis_lo = note_len_div_pos(rnd.len_min_idx, tr);
@@ -740,7 +1021,8 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         if (vis_lo > vis_hi) { vis_lo = vis_hi; }
         const int vis =
             vis_lo + static_cast<int>(rng_.range(static_cast<uint32_t>(vis_hi - vis_lo + 1)));
-        boundary = note_len_ms(note_len_div_real(vis, tr), p.timing.bpm);
+        drawn_div = note_len_div_real(vis, tr);
+        boundary = note_len_ms(drawn_div, p.timing.bpm);
     }
 
     if (!rnd.len_chain) {
@@ -761,6 +1043,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
             if (boundary > interval) { boundary = interval; }
             schedule_pending(now_ms + boundary + release, picked, false);
         }
+        capture_rnd_note(picked, drawn_div, now_ms);
         if (state_ != nullptr) {
             state_->runtime.last_note = picked;
             state_->runtime.show_note = true;
@@ -784,6 +1067,7 @@ void ModeEngine::advance_random(uint32_t now_ms) {
         schedule_pending(now_ms + attack, picked, true);
         schedule_pending(now_ms + gate + release, picked, false);
     }
+    capture_rnd_note(picked, drawn_div, now_ms);
     if (state_ != nullptr) {
         state_->runtime.last_note = picked;
         state_->runtime.show_note = true;

@@ -32,9 +32,10 @@ void MenuEngine::rebuild() {
                 push_items(content_.full_root, content_.full_root_count);
             }
             break;
+        case ScreenMode::Edit:
         case ScreenMode::Animation:
         default:
-            break;  // no editable content
+            break;  // no editable menu content (editor draws itself)
     }
 }
 
@@ -403,12 +404,15 @@ void MenuEngine::press_long() {
         pop();
         return;
     }
-    // Only two interactive screens are cycled by hand: Quick <-> Full.
+    // Three interactive screens cycled by hand: QUICK <-> MAIN <-> EDIT.
     // Animation left the cycle: it starts on idle (screensaver) or manually
     // from FULL -> System -> Anim, and any input returns to the origin screen.
-    const ScreenMode next = (st_->runtime.screen_mode == ScreenMode::Quick)
-                                ? ScreenMode::Full
-                                : ScreenMode::Quick;
+    ScreenMode next;
+    switch (st_->runtime.screen_mode) {
+        case ScreenMode::Quick: next = ScreenMode::Full; break;
+        case ScreenMode::Full: next = ScreenMode::Edit; break;
+        default: next = ScreenMode::Quick; break;  // Edit / Animation / ...
+    }
     st_->runtime.screen_mode = next;
     rebuild();
 }
