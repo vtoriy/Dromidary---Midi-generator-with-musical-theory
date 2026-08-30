@@ -415,14 +415,28 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         }
         const int rel = std::clamp(static_cast<int>(s.notes[0]) - lo, 0, span);
         const int y = roll_top + (span - rel) * (roll_h - 2) / span;
-        int dur_steps = 1;
+        float col_units = 1.0f;
         if (step_beats > 0.0f) {
-            const int d = static_cast<int>(
-                (note_len_div_beats(s.len_div) / step_beats) + 0.5f);
-            dur_steps = std::clamp(d, 1, page_len - c);
+            // Duration in grid-step units: 1.0 = one 1/16 step, 0.125 = 1/64.
+            col_units = note_len_div_beats(s.len_div) / step_beats;
         }
         const int x = c * col_w + 2;
-        const int tail_w = dur_steps * col_w - 3;
+        int tail_w;
+        if (col_units >= 1.0f) {
+            // One or more whole grid steps: a tail spanning those columns.
+            int steps = static_cast<int>(col_units);
+            if (static_cast<float>(steps) < col_units) {
+                ++steps;  // integer ceil
+            }
+            steps = std::clamp(steps, 1, page_len - c);
+            tail_w = steps * col_w - 3;
+        } else {
+            // Shorter than a grid step (e.g. 1/64 on the 1/16 grid): a
+            // pixel-proportional stub inside the note's own cell, so sub-step
+            // durations stay distinguishable (1/16 != 1/64).
+            tail_w = static_cast<int>(col_units * static_cast<float>(col_w) + 0.5f);
+            tail_w = std::min(tail_w, col_w - 3);
+        }
         if (tail_w > 1) {
             d.fill_rect(x + 3, y, tail_w, 1, true);
         }
