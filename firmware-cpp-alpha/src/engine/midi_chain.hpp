@@ -21,6 +21,11 @@ constexpr const char* kNoteLenDivs[] = {
 };
 constexpr int kNoteLenDivCount = 16;
 
+// Real kNoteLenDivs index of the default note duration (1/16 = index 6, "16").
+// A freshly placed note (and any erased step) uses this as its length, so a
+// note recorded after an erase is 1/16 rather than inheriting the old one.
+constexpr uint8_t kNoteLenDiv1_16 = 6;
+
 // Duration of one gate-length division in ms at the given BPM.
 uint32_t note_len_ms(uint8_t div_index, uint16_t bpm);
 

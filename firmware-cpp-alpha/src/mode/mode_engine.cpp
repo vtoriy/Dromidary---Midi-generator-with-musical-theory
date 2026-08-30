@@ -302,9 +302,13 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         ed.selected = idx;
         ed.has_selected = true;
         s.notes[0] = raw_note;
+        const bool fresh_note = (s.note_count == 0);
         s.note_count = 1;
         s.active = true;
         s.tie = false;
+        if (fresh_note) {
+            s.len_div = kNoteLenDiv1_16;  // a brand-new note defaults to 1/16
+        }
         cap_pending_[chip_idx] = true;
         cap_note_[chip_idx] = raw_note;
         cap_step_[chip_idx] = idx;
@@ -1003,7 +1007,7 @@ void ModeEngine::pattern_advance(uint32_t now_ms) {
             s.note_count = 0;
             s.notes[0] = 0;
             s.tie = false;
-            s.len_div = 8;
+            s.len_div = kNoteLenDiv1_16;
         }
         const uint32_t attack = gate_attack_ms();
         const uint32_t release = gate_release_ms();

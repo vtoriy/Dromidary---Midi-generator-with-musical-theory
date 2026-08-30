@@ -296,6 +296,8 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                         // The step was empty originally -> back to a rest.
                         s.note_count = 0;
                         s.active = false;
+                        s.tie = false;
+                        s.len_div = kNoteLenDiv1_16;
                     }
                     ed.prev_notes[idx] = -1;  // undo consumed
                     ed.prev_note = -1;
@@ -343,7 +345,7 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                     s.note_count = 0;
                     s.notes[0] = 0;
                     s.tie = false;
-                    s.len_div = 8;
+                    s.len_div = kNoteLenDiv1_16;
                 }
             }
             ui_dirty_ = true;
@@ -900,6 +902,7 @@ void AppLoop::editor_erase_step() {
     s.note_count = 0;
     s.notes[0] = 0;
     s.tie = false;
+    s.len_div = kNoteLenDiv1_16;  // a fresh note here starts at 1/16
     ed.prev_notes[idx] = -1;  // erased -> no original to restore
     // Revertible as one undoable unit (Rest on a step without a NOTE context).
     ed_undo_begin();
@@ -921,6 +924,7 @@ void AppLoop::editor_erase_page() {
         s.note_count = 0;
         s.notes[0] = 0;
         s.tie = false;
+        s.len_div = kNoteLenDiv1_16;
         ed.prev_notes[i] = -1;
         ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
     }
