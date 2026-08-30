@@ -249,6 +249,7 @@ struct RuntimeState {
     uint8_t beat {0};             // 0..3 running quarter of the transport beat
     uint8_t base_octave {2};      // recognised octave of the note keys
     bool live_mute {false};       // Rest held during playback
+    bool rest_erase {false};      // EDIT Rec+Play: Rest held -> clear each step as the playhead passes it
     uint8_t last_note {0};        // last/live note shown in the status bar
     bool show_note {false};
     uint8_t last_input_note {0};  // RandomNote: last pressed key note

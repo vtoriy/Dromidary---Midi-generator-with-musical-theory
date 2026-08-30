@@ -51,6 +51,11 @@ uint32_t note_len_ms(uint8_t div_index, uint16_t bpm) {
     return ms < 1 ? 1 : ms;
 }
 
+float note_len_div_beats(uint8_t div_index) {
+    if (div_index >= kNoteLenDivCount) { div_index = 6; }
+    return kNoteLenDivBeats[div_index];
+}
+
 // Straight divisions only: real indices into kNoteLenDivs without the
 // triplet entries (96, 48, 24, 12, 6, 3).
 constexpr uint8_t kStraightLenIdx[] = {0, 2, 4, 6, 8, 10, 12, 13, 14, 15};

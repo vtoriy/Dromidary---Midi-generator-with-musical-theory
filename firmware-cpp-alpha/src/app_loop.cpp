@@ -353,6 +353,12 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
     // Live-mute is a "hold Rest while playing" behaviour: the output is muted
     // for as long as the button is held, and released immediately after.
     runtime.live_mute = rest_held;
+    // EDIT Rec+Play live-erase: while Rest is held each step is cleared as the
+    // playhead reaches it, so the user sees notes vanish in real time instead
+    // of only after releasing the button (the release still commits any tail).
+    runtime.rest_erase = rest_held &&
+                         state_.runtime.screen_mode == ScreenMode::Edit &&
+                         state_.runtime.recording && mode_.pattern_running();
 
     const bool rest_click = fn_edge(kBtnRest);
     if (rest_click && shift_held) {

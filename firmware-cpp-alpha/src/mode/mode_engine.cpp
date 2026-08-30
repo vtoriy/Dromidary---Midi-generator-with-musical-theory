@@ -995,6 +995,16 @@ void ModeEngine::pattern_advance(uint32_t now_ms) {
 
     if (fire) {
         Step& s = p.steps[ptn_pos_];
+        // Live-erase while holding Rest in EDIT Rec+Play: clear the step the
+        // moment the playhead reaches it, so notes disappear in real time rather
+        // than waiting for the button release (release still commits any tail).
+        if (state_ != nullptr && state_->runtime.rest_erase) {
+            s.active = false;
+            s.note_count = 0;
+            s.notes[0] = 0;
+            s.tie = false;
+            s.len_div = 8;
+        }
         const uint32_t attack = gate_attack_ms();
         const uint32_t release = gate_release_ms();
         const bool has_note = s.active && s.note_count > 0 && s.notes[0] != 0;

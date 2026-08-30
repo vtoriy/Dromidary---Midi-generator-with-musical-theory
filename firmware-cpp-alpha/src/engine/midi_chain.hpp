@@ -24,6 +24,11 @@ constexpr int kNoteLenDivCount = 16;
 // Duration of one gate-length division in ms at the given BPM.
 uint32_t note_len_ms(uint8_t div_index, uint16_t bpm);
 
+// Beats (quarter-note units) of one gate-length division; index-aligned with
+// kNoteLenDivs (0 = 1/128 .. 15 = '4). Exposed so the pattern editor can draw
+// a duration tail proportional to the TRUE length instead of the index order.
+float note_len_div_beats(uint8_t div_index);
+
 // LEN list visibility: with triplets off only straight divisions are offered.
 int note_len_div_count(bool triplets);
 // Map a visible position (0..count-1) to the real kNoteLenDivs index.

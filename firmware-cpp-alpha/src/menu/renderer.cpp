@@ -401,9 +401,13 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
     // Floor line.
     d.fill_rect(0, floor_y, page_len * col_w, 1, true);
 
-    // Notes: a dot at the pitch row (relative position preserved), with a
-    // short duration tail to the right proportional to the LEN division. Kept
-    // as pure dots/blocks so no vertical bars ever cover the note field.
+    // Notes: a 3x3 head at the pitch row (relative position preserved) plus a
+    // duration tail to the right whose WIDTH is proportional to the true note
+    // length (beats -> grid steps), so a 1/8, 1/4, 1/2 or whole note all scale
+    // correctly instead of sharing one tiny capped stub. Tails are drawn first,
+    // heads second, so a later note is always visible over a passing tail.
+    // Kept as flat blocks so no vertical bars ever cover the note field.
+    const float step_beats = (p.grid64 ? 0.0625f : 0.25f);
     for (int c = 0; c < page_len; ++c) {
         const Step& s = p.steps[ed.page * 16 + c];
         if (!s.active || s.note_count == 0) {
@@ -411,15 +415,26 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         }
         const int rel = std::clamp(static_cast<int>(s.notes[0]) - lo, 0, span);
         const int y = roll_top + (span - rel) * (roll_h - 2) / span;
-        const int x = c * col_w + 2;
-        // Note head: 3x3 block (readable at a glance).
-        d.fill_rect(x, y - 1, 3, 3, true);
-        // Duration tail inside the column (division index scales it).
-        const int tail = std::min(col_w - 3,
-                                  1 + static_cast<int>(s.len_div) / 2);
-        if (tail > 1) {
-            d.fill_rect(x + 3, y, tail, 1, true);
+        int dur_steps = 1;
+        if (step_beats > 0.0f) {
+            const int d = static_cast<int>(
+                (note_len_div_beats(s.len_div) / step_beats) + 0.5f);
+            dur_steps = std::clamp(d, 1, page_len - c);
         }
+        const int x = c * col_w + 2;
+        const int tail_w = dur_steps * col_w - 3;
+        if (tail_w > 1) {
+            d.fill_rect(x + 3, y, tail_w, 1, true);
+        }
+    }
+    for (int c = 0; c < page_len; ++c) {
+        const Step& s = p.steps[ed.page * 16 + c];
+        if (!s.active || s.note_count == 0) {
+            continue;
+        }
+        const int rel = std::clamp(static_cast<int>(s.notes[0]) - lo, 0, span);
+        const int y = roll_top + (span - rel) * (roll_h - 2) / span;
+        d.fill_rect(c * col_w + 2, y - 1, 3, 3, true);
     }
 
     // Cursor: a small tick on the top edge and a dot under the floor line —
