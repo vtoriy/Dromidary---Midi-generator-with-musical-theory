@@ -277,6 +277,11 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
             if (fn_pressed(kBtnShift)) {
                 // Shift+Rest clears the whole visible 16-step page.
                 editor_erase_page();
+            } else if (state_.runtime.recording && mode_.pattern_running()) {
+                // Rec+Play live: a held Rest writes a pause. Remember where and
+                // when it was pressed; the length is applied on release.
+                rest_cap_ms_ = now_ms;
+                rest_cap_step_ = state_.runtime.current_step;
             } else if (ed.field == 0) {
                 // Rest in NOTE focus restores the ORIGINAL note of the current
                 // step (undo the pitch change) instead of erasing — when the
@@ -308,6 +313,40 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                 !mode_.pattern_running()) {
                 editor_move(1);
             }
+        }
+    }
+
+    // Rec+Play live editing: releasing a held Rest commits a pause as long as
+    // the hold. Every spanned grid step is cleared to a non-tie empty, so
+    // playback forces a cutoff across the whole range ("hold Rest = pause").
+    if (fn_fell(kBtnRest)) {
+        if (state_.runtime.screen_mode == ScreenMode::Edit &&
+            state_.runtime.recording && mode_.pattern_running()) {
+            Pattern& pat = state_.active_pattern();
+            const int length = std::max<int>(
+                1, std::min<int>(pat.length, kStepCountMax));
+            float quarter = 60000.0f;
+            float bpm_f = pat.timing.bpm;
+            if (bpm_f < 20.0f) { bpm_f = 120.0f; }
+            quarter /= bpm_f;
+            const float step_f = pat.grid64 ? quarter / 16.0f : quarter / 4.0f;
+            const uint32_t step_ms = static_cast<uint32_t>(step_f < 1.0f ? 1.0f : step_f);
+            const uint32_t held = now_ms - rest_cap_ms_;
+            uint32_t n = (step_ms > 0) ? held / step_ms : 0u;
+            if (n < 1) { n = 1; }
+            const uint8_t idx0 = rest_cap_step_;
+            for (uint32_t k = 0; k < n; ++k) {
+                const int ti = static_cast<int>((idx0 + k) % length);
+                Step& s = pat.steps[ti];
+                if (s.active || s.tie) {
+                    s.active = false;
+                    s.note_count = 0;
+                    s.notes[0] = 0;
+                    s.tie = false;
+                    s.len_div = 8;
+                }
+            }
+            ui_dirty_ = true;
         }
     }
 
@@ -854,6 +893,7 @@ void AppLoop::editor_erase_step() {
     s.active = false;
     s.note_count = 0;
     s.notes[0] = 0;
+    s.tie = false;
     ed.prev_notes[idx] = -1;  // erased -> no original to restore
     // Revertible as one undoable unit (Rest on a step without a NOTE context).
     ed_undo_begin();
@@ -874,6 +914,7 @@ void AppLoop::editor_erase_page() {
         s.active = false;
         s.note_count = 0;
         s.notes[0] = 0;
+        s.tie = false;
         ed.prev_notes[i] = -1;
         ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
     }

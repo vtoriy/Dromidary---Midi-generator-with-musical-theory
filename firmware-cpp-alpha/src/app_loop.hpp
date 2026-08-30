@@ -97,6 +97,12 @@ private:
     uint32_t last_anim_ms_ {0};
     bool ui_dirty_ {true};
 
+    // Rec+Play live editing: a held Rest records a pause. The press location
+    // and time are remembered so the release can clear exactly the spanned
+    // grid steps (non-tie empties -> forced cutoff during playback).
+    uint32_t rest_cap_ms_ {0};
+    uint8_t rest_cap_step_ {0};
+
     // MIDI Clock sync state.
     // Master: 24 ppqn ticker against runtime.playing.
     // Master clock accumulator: elapsed time in 1/64 ms units; an F8 goes out

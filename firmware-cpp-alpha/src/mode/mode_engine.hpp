@@ -153,6 +153,7 @@ private:
     // Pattern (PTRN slot) transport + capture state.
     void pattern_advance(uint32_t now_ms);
     uint32_t pattern_step_ms() const;
+    uint8_t note_len_div_for_steps(uint32_t steps, const Pattern& p) const;
     bool ptn_playing_ {false};
     bool capture_only_ {false};    // silent transport while recording RND output
     uint8_t ptn_pos_ {0};

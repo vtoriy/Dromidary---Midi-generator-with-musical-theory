@@ -304,6 +304,7 @@ void ModeEngine::note_on(uint8_t chip_idx, uint8_t raw_note, uint32_t now_ms) {
         s.notes[0] = raw_note;
         s.note_count = 1;
         s.active = true;
+        s.tie = false;
         cap_pending_[chip_idx] = true;
         cap_note_[chip_idx] = raw_note;
         cap_step_[chip_idx] = idx;
@@ -490,14 +491,34 @@ void ModeEngine::note_off(uint8_t chip_idx, uint32_t now_ms) {
             cap_pending_[chip_idx] = false;
             const uint8_t cap = cap_note_[chip_idx];
             if (fixdur && cap != 0) {
+                Pattern& pat = state_->active_pattern();
+                const uint32_t step_ms = pattern_step_ms();
                 const uint32_t held = now_ms - cap_start_ms_[chip_idx];
-                const uint8_t div = nearest_len_div(
-                    held, state_->active_pattern().timing.bpm);
+                // A held note is as long as it is; duration is the number of
+                // grid steps it spans ("how long you hold = how long it lasts").
+                uint32_t n = (step_ms > 0) ? held / step_ms : 0u;
+                if (n < 1) { n = 1; }
                 const uint8_t idx = cap_step_[chip_idx];
                 if (idx < kStepCountMax) {
-                    auto& s = state_->active_pattern().steps[idx];
+                    Step& s = pat.steps[idx];
                     if (s.notes[0] == cap) {
-                        s.len_div = div;
+                        s.len_div = note_len_div_for_steps(n, pat);
+                        const int length = std::max<int>(
+                            1, std::min<int>(pat.length, kStepCountMax));
+                        for (uint32_t k = 1; k < n; ++k) {
+                            const int ti = static_cast<int>((idx + k) % length);
+                            Step& t = pat.steps[ti];
+                            if (t.active && t.note_count > 0 && t.notes[0] != 0) {
+                                break;  // a real note interrupts the stretch
+                            }
+                            // Mark the continuation so playback sustains the
+                            // note across these steps instead of gating it off.
+                            t.active = false;
+                            t.note_count = 0;
+                            t.notes[0] = 0;
+                            t.tie = true;
+                            t.len_div = 0;
+                        }
                     }
                 }
                 if (midi_ != nullptr) {
@@ -829,6 +850,26 @@ uint32_t ModeEngine::pattern_step_ms() const {
     return static_cast<uint32_t>(step < 1.0f ? 1.0f : step);
 }
 
+uint8_t ModeEngine::note_len_div_for_steps(uint32_t steps, const Pattern& p) const {
+    uint32_t step_ms = pattern_step_ms();
+    if (step_ms < 1u) {
+        step_ms = 1u;
+    }
+    // Gate is scaled down by gate_pct, so a note sustained across `steps` grid
+    // steps needs a division whose gate still spans the whole run.
+    const uint32_t gate_pct = (p.random.gate_pct == 0) ? 100u : p.random.gate_pct;
+    const uint64_t required_ms =
+        (static_cast<uint64_t>(steps) * static_cast<uint64_t>(step_ms) * 100u) /
+        gate_pct;
+    for (uint8_t i = 0; i < kNoteLenDivCount; ++i) {
+        const uint32_t d = note_len_ms(i, p.timing.bpm);
+        if (static_cast<uint64_t>(d) >= required_ms) {
+            return i;
+        }
+    }
+    return static_cast<uint8_t>(kNoteLenDivCount - 1);
+}
+
 void ModeEngine::pattern_start(uint32_t now_ms) {
     ptn_playing_ = true;
     ptn_pos_ = 0;
@@ -956,21 +997,32 @@ void ModeEngine::pattern_advance(uint32_t now_ms) {
         Step& s = p.steps[ptn_pos_];
         const uint32_t attack = gate_attack_ms();
         const uint32_t release = gate_release_ms();
-        if (ptn_last_note_ != 0) {
-            schedule_pending(now_ms + swing + release, ptn_last_note_, false);
-            ptn_last_note_ = 0;
-        }
-        if (s.active && s.note_count > 0 && s.notes[0] != 0) {
-            schedule_pending(now_ms + swing + attack, s.notes[0], true);
-            uint32_t gate = note_len_ms(s.len_div, p.timing.bpm)
-                            * p.random.gate_pct / 100u;
-            if (gate < 1) { gate = 1; }
-            schedule_pending(now_ms + swing + gate + release, s.notes[0], false);
-            ptn_last_note_ = s.notes[0];
-            state_->runtime.last_note = s.notes[0];
+        const bool has_note = s.active && s.note_count > 0 && s.notes[0] != 0;
+        const bool sustain = s.tie && !has_note;
+        if (sustain) {
+            // Tie continuation of a stretched note: keep the start step's note
+            // sounding — its scheduled gate-off fires naturally when the run
+            // ends. Do not cut or restart it here.
             state_->runtime.show_note = true;
         } else {
-            state_->runtime.show_note = false;
+            if (ptn_last_note_ != 0) {
+                schedule_pending(now_ms + swing + release, ptn_last_note_, false);
+                ptn_last_note_ = 0;
+            }
+            if (has_note) {
+                schedule_pending(now_ms + swing + attack, s.notes[0], true);
+                uint32_t gate = note_len_ms(s.len_div, p.timing.bpm)
+                                * p.random.gate_pct / 100u;
+                if (gate < 1) { gate = 1; }
+                schedule_pending(now_ms + swing + gate + release, s.notes[0], false);
+                ptn_last_note_ = s.notes[0];
+                state_->runtime.last_note = s.notes[0];
+                state_->runtime.show_note = true;
+            } else {
+                // An empty, non-tie step is a pause: cut any sounding note here
+                // so a recorded Rest (a non-tie empty run) mutes the range.
+                state_->runtime.show_note = false;
+            }
         }
     } else if (odd) {
         swing = 0;
