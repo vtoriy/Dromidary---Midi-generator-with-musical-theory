@@ -30,6 +30,7 @@ private:
     void editor_cycle_field();
     void editor_erase_step();   // Rest: clear the focused step
     void editor_erase_page();   // Shift+Rest: clear the visible 16-step page
+    void editor_delete_range();  // Rest with a SELECT range: clear the selection
     void editor_select_toggle();  // Shift+click: enter/leave the SELECT sub-mode
     void editor_shortcut(uint8_t key, uint32_t now_ms);  // Shift + note-key hotkeys
 

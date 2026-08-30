@@ -282,6 +282,9 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
                 // when it was pressed; the length is applied on release.
                 rest_cap_ms_ = now_ms;
                 rest_cap_step_ = state_.runtime.current_step;
+            } else if (ed.sel_active) {
+                // Rest with an active SELECT range clears the whole range.
+                editor_delete_range();
             } else if (ed.field == 0) {
                 // Rest in NOTE focus restores the ORIGINAL note of the current
                 // step (undo the pitch change) instead of erasing — when the
@@ -928,6 +931,36 @@ void AppLoop::editor_erase_page() {
         ed.prev_notes[i] = -1;
         ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
     }
+}
+
+// Rest with an active SELECT range clears every step inside it as one undoable
+// action, then drops the selection. Mirrors editor_erase_page but bounded by
+// the selection bounds instead of the visible page.
+void AppLoop::editor_delete_range() {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    int lo = 0, hi = 0;
+    if (!selection_bounds(ed, len, lo, hi)) {
+        return;  // no range -> nothing to do
+    }
+    ed_undo_begin();
+    for (int i = lo; i <= hi; ++i) {
+        Step old = p.steps[i];
+        const int16_t old_prev = ed.prev_notes[i];
+        auto& s = p.steps[i];
+        s.active = false;
+        s.note_count = 0;
+        s.notes[0] = 0;
+        s.tie = false;
+        s.len_div = kNoteLenDiv1_16;
+        ed.prev_notes[i] = -1;
+        ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
+    }
+    // The range is gone -> clear the selection highlight.
+    ed.sel_active = false;
+    ed.sel_a = 0;
+    ed.sel_b = 0;
 }
 
 void AppLoop::editor_select_toggle() {
