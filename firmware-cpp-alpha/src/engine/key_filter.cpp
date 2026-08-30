@@ -1,5 +1,7 @@
 #include "key_filter.hpp"
 
+#include <algorithm>
+
 namespace drom {
 
 namespace {
@@ -82,6 +84,30 @@ uint8_t key_filter_apply(uint8_t note, const KeyFilterCfg& cfg, bool& muted) {
             muted = true;
             return note;
     }
+}
+
+uint8_t transpose_compute(uint8_t orig, int offset, uint8_t root,
+                          ScaleId scale, SnapMode mode, bool& doomed) {
+    doomed = false;
+    int v = static_cast<int>(orig) + offset;
+    v = std::clamp<int>(v, kNoteRangeMin, kNoteRangeMax);
+    const uint8_t n = static_cast<uint8_t>(v);
+    if (scale == ScaleId::Off) {
+        return n;  // free (chromatic) transpose, clamped to the note range
+    }
+    KeyFilterCfg cfg;
+    cfg.enabled = true;
+    cfg.root_note = root % 12;
+    cfg.scale = scale;
+    cfg.mode = mode;
+    if (note_in_scale(n, cfg)) {
+        return n;
+    }
+    if (mode == SnapMode::Mute) {
+        doomed = true;  // out-of-scale + Mute -> dropped on commit
+        return n;
+    }
+    return key_filter_apply(n, cfg, doomed);  // SnapUp / SnapDown
 }
 
 }  // namespace drom

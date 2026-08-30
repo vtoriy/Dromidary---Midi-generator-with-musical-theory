@@ -7,6 +7,7 @@
 #include "tusb.h"
 
 #include "engine/midi_chain.hpp"
+#include "engine/key_filter.hpp"
 #include "persist.hpp"
 #include "platform/board_pins.hpp"
 
@@ -47,6 +48,7 @@ constexpr uint8_t kKeyPaste = 1;        // C#  -> paste clipboard onto page
 constexpr uint8_t kKeyDup = 2;          // D   -> duplicate (copy+paste) page
 constexpr uint8_t kKeyUndo = 3;         // D#  -> undo last batch
 constexpr uint8_t kKeyRedo = 4;         // E   -> redo
+constexpr uint8_t kKeyTranspose = 5;    // F   -> transpose tool (enter/apply)
 
 // Sentinel step index marking a length-only undo/redo entry (no step touched).
 constexpr uint8_t kLenOnlyIndex = 0xFF;
@@ -283,7 +285,10 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
     if (fn_edge(kBtnRest)) {
         if (state_.runtime.screen_mode == ScreenMode::Edit) {
             auto& ed = state_.editor;
-            if (fn_pressed(kBtnShift)) {
+            if (ed.transpose.active) {
+                // Rest cancels the open transpose preview (which never mutates).
+                editor_transpose_cancel();
+            } else if (fn_pressed(kBtnShift)) {
                 // Shift+Rest clears the whole visible 16-step page.
                 editor_erase_page();
             } else if (state_.runtime.recording && mode_.pattern_running()) {
@@ -411,9 +416,10 @@ void AppLoop::process_notes(uint32_t raw, uint32_t now_ms) {
                         fn_pressed(kBtnShift)) {
                         editor_shortcut(i, now_ms);
                     } else if (state_.runtime.screen_mode == ScreenMode::Edit &&
-                               state_.editor.sel_mode) {
-                        // In the SELECT sub-mode a bare note key must not edit
-                        // a step — it only shapes the marked range.
+                               (state_.editor.sel_mode ||
+                                state_.editor.transpose.active)) {
+                        // In the SELECT sub-mode — or with the transpose tool
+                        // open — a bare note key must not edit a step.
                     } else if (state_.runtime.screen_mode == ScreenMode::Edit) {
                         // Note-key step write is an undoable single-step batch.
                         const int idx = std::min<int>(
@@ -524,7 +530,13 @@ void AppLoop::process_joystick(uint32_t raw, uint32_t now_ms) {
                 // Rest+click erases the focused step; a plain click SELECTS the
                 // step under the cursor (so note keys assign to it) and cycles
                 // the focused field.
-                if (fn_pressed(kBtnShift)) {
+                if (state_.editor.transpose.active) {
+                    // Transpose tool: a click always cycles the preview field
+                    // (OFFSET -> KEY -> SCALE -> MODE). Shift+F applies and
+                    // Rest cancels, so Shift/Rest + click must not select or
+                    // erase anything here.
+                    editor_cycle_field();
+                } else if (fn_pressed(kBtnShift)) {
                     editor_select_toggle();
                 } else if (fn_pressed(kBtnRest)) {
                     editor_erase_step();
@@ -749,6 +761,48 @@ void AppLoop::editor_tilt(Direction dir, bool shift) {
     Pattern& p = state_.active_pattern();
     Step& s = p.steps[std::min<int>(ed.cur, kStepCountMax - 1)];
     const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+
+    // Transpose tool: the joystick edits the bottom-row preview fields.
+    // Up/Down adjust the focused field (OFFSET / KEY / SCALE / MODE), Shift =
+    // coarse (octave for OFFSET); Left/Right still navigate steps (Shift =
+    // page flip). Because field 3 now means MODE (not PLEN), the usual
+    // left/right PLEN edit is bypassed while the tool is open.
+    if (ed.transpose.active) {
+        if (dir == Direction::Left || dir == Direction::Right) {
+            const int d = (dir == Direction::Right) ? 1 : -1;
+            editor_move(shift ? d * 16 : d);
+            ui_dirty_ = true;
+            return;
+        }
+        const int delta = (dir == Direction::Up) ? 1 : -1;
+        const int stp = shift ? 12 : 1;
+        switch (ed.field) {
+            case 0: {  // OFFSET semitones (Shift = octave)
+                const int v = static_cast<int>(ed.transpose.offset) + delta * stp;
+                ed.transpose.offset =
+                    static_cast<int8_t>(std::clamp(v, -24, 24));
+                break;
+            }
+            case 1: {  // KEY root C..B
+                const int v = static_cast<int>(ed.transpose.root) + delta;
+                ed.transpose.root =
+                    static_cast<uint8_t>((v + 12) % 12);
+                break;
+            }
+            case 2: {  // SCALE cycle Off..Chromatic
+                const int v = static_cast<int>(ed.transpose.scale) + delta;
+                ed.transpose.scale = static_cast<ScaleId>((v + 16) % 16);
+                break;
+            }
+            default: {  // MODE cycle SnapUp / SnapDown / Mute
+                const int v = static_cast<int>(ed.transpose.mode) + delta;
+                ed.transpose.mode = static_cast<SnapMode>((v + 3) % 3);
+                break;
+            }
+        }
+        ui_dirty_ = true;
+        return;
+    }
 
     // SELECT sub-mode: the range is a bounded block on the current page, only
     // loosely tied to the cursor. Left/Right shift the START edge, Up/down
@@ -976,6 +1030,81 @@ void AppLoop::editor_delete_range() {
     ed.sel_b = 0;
 }
 
+void AppLoop::editor_transpose_enter() {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    // Scope: the active SELECT range if one is marked, otherwise the whole
+    // pattern (not just the visible page) so the tool edits what the user
+    // highlighted rather than whatever happens to be on screen.
+    if (ed.sel_active) {
+        const int lo = std::max<int>(0, ed.sel_a);
+        const int hi = std::min<int>(len - 1, ed.sel_b);
+        ed.t_lo = static_cast<int16_t>(lo);
+        ed.t_hi = static_cast<int16_t>(hi);
+    } else {
+        ed.t_lo = 0;
+        ed.t_hi = static_cast<int16_t>(len - 1);
+    }
+    // Fresh start: zero offset, no key constraint (a plain semitone shift by
+    // default), and focus on the OFFSET field for immediate up/down feedback.
+    ed.transpose.offset = 0;
+    ed.transpose.root = static_cast<uint8_t>(
+        state_.active_pattern().key_filter.root_note % 12);
+    ed.transpose.scale = ScaleId::Off;
+    ed.transpose.mode = SnapMode::SnapUp;
+    ed.transpose.active = true;
+    ed.field = 0;
+    ui_dirty_ = true;
+}
+
+void AppLoop::editor_transpose_cancel() {
+    auto& ed = state_.editor;
+    // The preview never mutates the pattern, so cancel is just leaving the mode.
+    ed.transpose.active = false;
+    ui_dirty_ = true;
+}
+
+void AppLoop::editor_transpose_apply() {
+    auto& ed = state_.editor;
+    Pattern& p = state_.active_pattern();
+    const int len = std::max<int>(1, std::min<int>(p.length, kStepCountMax));
+    const int lo = std::max<int>(0, std::min<int>(ed.t_lo, len - 1));
+    const int hi = std::max<int>(lo, std::min<int>(ed.t_hi, len - 1));
+    ed_undo_begin();
+    for (int i = lo; i <= hi; ++i) {
+        Step old = p.steps[i];
+        const int16_t old_prev = ed.prev_notes[i];
+        auto& s = p.steps[i];
+        if (!s.active || s.note_count == 0) {
+            continue;
+        }
+        bool doomed = false;
+        const uint8_t target = transpose_compute(
+            s.notes[0], ed.transpose.offset, ed.transpose.root,
+            ed.transpose.scale, ed.transpose.mode, doomed);
+        if (doomed) {
+            // Skip mode: the note leaves the pattern on commit, as planned.
+            s.active = false;
+            s.note_count = 0;
+            s.notes[0] = 0;
+            s.tie = false;
+            s.len_div = kNoteLenDiv1_16;
+            ed.prev_notes[i] = -1;
+        } else if (target != s.notes[0]) {
+            s.notes[0] = target;
+            if (ed.prev_notes[i] < 0) {
+                ed.prev_notes[i] = static_cast<int16_t>(old.notes[0]);
+            }
+        } else {
+            continue;  // unchanged by the constraint -> nothing to record
+        }
+        ed_undo_record(static_cast<uint8_t>(i), old, old_prev);
+    }
+    ed.transpose.active = false;
+    ui_dirty_ = true;
+}
+
 void AppLoop::editor_select_toggle() {
     auto& ed = state_.editor;
     if (!ed.sel_mode && !ed.sel_active) {
@@ -1175,6 +1304,12 @@ void AppLoop::editor_shortcut(uint8_t key, uint32_t now_ms) {
         16, len - static_cast<std::size_t>(ed.page) * 16);
     const std::size_t start = static_cast<std::size_t>(ed.page) * 16;
 
+    // While the transpose tool is open, only Shift+F (apply) is meaningful;
+    // every other Shift+note hotkey is ignored so it can't fire mid-preview.
+    if (ed.transpose.active && key != kKeyTranspose) {
+        return;
+    }
+
     switch (key) {
         case kKeyCopy: {
             // When a range is selected, copy exactly that range. Otherwise fall
@@ -1277,6 +1412,15 @@ void AppLoop::editor_shortcut(uint8_t key, uint32_t now_ms) {
             if (ed_redo()) {
                 set_hint(kHintRedo, now_ms);
             }
+            break;
+        }
+        case kKeyTranspose: {
+            if (ed.transpose.active) {
+                editor_transpose_apply();
+            } else {
+                editor_transpose_enter();
+            }
+            set_hint(kHintTranspose, now_ms);
             break;
         }
         default:

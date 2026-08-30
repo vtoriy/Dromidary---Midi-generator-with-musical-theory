@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "../engine/midi_chain.hpp"
+#include "../engine/key_filter.hpp"
 
 namespace drom {
 
@@ -353,6 +354,13 @@ void draw_seg_range_band(DisplaySh1106& d, const Segment& s, int y, bool focused
     d.fill_rect(x, y + 7, w, focused ? 2 : 1, true);
 }
 
+// Transpose-tool bottom-row labels (indexed by ScaleId and SnapMode).
+constexpr const char* kTPScaleLabels[16] = {
+    "Off", "Maj", "Min", "Dor", "Phr", "Lyd", "Mix", "Loc",
+    "HMn", "MMn", "PMa", "PMi", "Blu", "WtT", "Dim", "Chr",
+};
+constexpr const char* kTPModeLabels[3] = {"UP", "DN", "SK"};
+
 // Pattern editor screen (ScreenMode::Edit): a piano-roll of the visible page
 // (16 steps across the full width) with auto-scaled pitch rows, plus a single
 // detail line: STEP, NOTE, LEN, ON and the pattern length (PLEN).
@@ -451,6 +459,50 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         d.fill_rect(c * col_w + 2, y - 1, 3, 3, true);
     }
 
+    // Transpose preview: outline rings mark where the affected notes will land
+    // (their target pitch); a ring with a slash marks a note that skip-mode
+    // will DELETE on commit. Drawn over the solid heads so the proposed edit is
+    // unmistakable, but nothing is written to the pattern until Shift+F applies.
+    if (ed.transpose.active) {
+        const int t_lo = std::max<int>(ed.t_lo, static_cast<int>(ed.page) * 16);
+        const int t_hi =
+            std::min<int>(ed.t_hi, static_cast<int>(ed.page) * 16 + page_len - 1);
+        auto ring = [&](int x, int y) {  // 3x3 outline, top-left (x, y)
+            d.fill_rect(x, y, 3, 1, true);
+            d.fill_rect(x, y + 2, 3, 1, true);
+            d.fill_rect(x, y, 1, 3, true);
+            d.fill_rect(x + 2, y, 1, 3, true);
+        };
+        for (int c = 0; c < page_len; ++c) {
+            const int abs = static_cast<int>(ed.page) * 16 + c;
+            if (abs < t_lo || abs > t_hi) {
+                continue;
+            }
+            const Step& st = p.steps[abs];
+            if (!st.active || st.note_count == 0) {
+                continue;
+            }
+            bool doomed = false;
+            const uint8_t target = transpose_compute(
+                st.notes[0], ed.transpose.offset, ed.transpose.root,
+                ed.transpose.scale, ed.transpose.mode, doomed);
+            const int hx = c * col_w + 2;
+            if (doomed) {
+                const int rel =
+                    std::clamp(static_cast<int>(st.notes[0]) - lo, 0, span);
+                const int y = roll_top + (span - rel) * (roll_h - 2) / span;
+                ring(hx, y - 1);
+                for (int k = 0; k < 3; ++k) {  // slash across the head
+                    d.fill_rect(hx + k, y - 1 + k, 1, 1, true);
+                }
+            } else if (target != st.notes[0]) {
+                const int rel = std::clamp(static_cast<int>(target) - lo, 0, span);
+                const int y = roll_top + (span - rel) * (roll_h - 2) / span;
+                ring(hx, y - 1);
+            }
+        }
+    }
+
     // Cursor: a small tick on the top edge and a dot under the floor line —
     // nothing covering the note rows themselves. This column is ALSO the
     // playback/playhead column (see below), so there is a single unified
@@ -515,6 +567,29 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
 
     snprintf(buf, sizeof(buf), "S%02d", ed.page * 16 + std::min<int>(ed.cur % 16, page_len - 1) + 1);
     field_box(0, 26, buf, false);
+
+    // Transpose tool: replace the bottom-row fields (NOTE/LEN/ON/PLEN) with
+    // OFFSET / KEY / SCALE / MODE (cycled by click; ed.field 0..3 rebinds).
+    // Up/down edits the focused one (preview), Shift+F applies, Rest cancels.
+    if (ed.transpose.active) {
+        char tbuf[8];
+        snprintf(tbuf, sizeof(tbuf), "%+d", static_cast<int>(ed.transpose.offset));
+        field_box(28, 34, tbuf, ed.field == 0);
+        snprintf(tbuf, sizeof(tbuf), "%s",
+                 midi_note_glyph(static_cast<uint8_t>(60 + (ed.transpose.root % 12))));
+        field_box(62, 24, tbuf, ed.field == 1);
+        const uint8_t s = static_cast<uint8_t>(ed.transpose.scale);
+        field_box(88, 20, kTPScaleLabels[s < 16 ? s : 0], ed.field == 2);
+        const uint8_t m = static_cast<uint8_t>(ed.transpose.mode);
+        field_box(110, 20, kTPModeLabels[m <= 2 ? m : 0], ed.field == 3);
+        const int tpages = (len + 15) / 16;
+        if (tpages > 1) {
+            snprintf(buf, sizeof(buf), "%d/%d",
+                     static_cast<int>(ed.page) + 1, tpages);
+            d.draw_text(buf, DisplaySh1106::kWidth - 18, roll_top - 9);
+        }
+        return;
+    }
 
     char note_buf[8];       // "C4", "F#3", "---" (no +/- sign inside)
     if (is_on) {
@@ -614,6 +689,7 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
             case kHintUndo:   label = "UNDO"; break;
             case kHintRedo:   label = "REDO"; break;
             case kHintDup:    label = "DUP";  break;
+            case kHintTranspose: label = "TRAN"; break;
             default: break;
         }
         if (*label) {

@@ -38,6 +38,7 @@ enum EditorHint : uint8_t {
     kHintUndo,
     kHintRedo,
     kHintDup,
+    kHintTranspose,
 };
 
 // Logic around copy/paste + undo/redo:
@@ -56,6 +57,24 @@ struct PtnEditorUI {
     int16_t prev_note {-1}; // original note of the selected step (undo); -1 = none
     std::array<int16_t, kStepCountMax> prev_notes {}; // per-step original note
     bool edit_note {false}; // joystick pitch editing unlocked (Shift+Rec in EDIT)
+
+    // --- Transpose edit (Shift+F): preview-based pitch transpose ------------
+    // Shift+F in EDIT enters a preview mode. While active the bottom-row fields
+    // are OFFSET/KEY/SCALE/MODE (cycled by click); up/down edits the active
+    // field and refreshes the preview on the roll; Rest cancels (no change) and
+    // Shift+F applies the result to the patched steps as one undoable batch.
+    // Scope is the active SELECT range, or the whole pattern when none. Steps
+    // are NOT mutated during the preview, so cancel is a no-op and only apply
+    // writes back (with key-constrained snap and skip-deletion).
+    struct TransposeEdit {
+        bool active {false};
+        int8_t offset {0};        // semitones (-24..+24, Shift = octave)
+        uint8_t root {0};         // tonality root C..B (0..11)
+        ScaleId scale {ScaleId::Off};
+        SnapMode mode {SnapMode::SnapUp};
+    } transpose;
+    int16_t t_lo {0};             // affected scope start (inclusive)
+    int16_t t_hi {0};             // affected scope end (inclusive)
 
     // --- Range selection (universal mechanism, Phase 1) ---------------------
     // A selection is an inclusive step range [aLo..bHi] that stays visible

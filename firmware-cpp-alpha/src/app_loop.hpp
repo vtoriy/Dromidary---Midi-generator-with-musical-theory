@@ -33,6 +33,9 @@ private:
     void editor_delete_range();  // Rest with a SELECT range: clear the selection
     void editor_select_toggle();  // Shift+click: enter/leave the SELECT sub-mode
     void editor_shortcut(uint8_t key, uint32_t now_ms);  // Shift + note-key hotkeys
+    void editor_transpose_enter();    // Shift+F: enter the transpose preview (scope)
+    void editor_transpose_apply();    // Shift+F inside: commit the preview & exit
+    void editor_transpose_cancel();   // Rest inside: discard the preview & exit
 
     // Undo/redo (command-based, batched). Callers snapshot the OLD state, then
     // modify the pattern/prev_notes, then ed_undo_record(...) reads the NEW
