@@ -451,6 +451,28 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         d.fill_rect(c * col_w + 2, y - 1, 3, 3, true);
     }
 
+    // Padlock: joystick note-pitch editing is LOCKED by default so up/down
+    // never touches notes (assign via the note keys); Shift+Rec in the editor
+    // toggles it. Closed padlock = locked, open = unlocked (up/down edits
+    // pitch). Drawn in the idle top strip, clear of the roll and detail line.
+    {
+        const int lx = 2, ly = 1;
+        // body
+        d.fill_rect(lx, ly + 3, 5, 3, true);
+        // shackle: open leaves a visible gap (no keyhole); closed links over
+        // the body and adds a keyhole.
+        if (ed.edit_note) {
+            d.fill_rect(lx + 1, ly, 3, 1, true);
+            d.fill_rect(lx, ly + 1, 1, 1, true);
+            d.fill_rect(lx + 4, ly + 1, 1, 1, true);
+        } else {
+            d.fill_rect(lx + 1, ly, 3, 1, true);
+            d.fill_rect(lx, ly + 1, 1, 2, true);
+            d.fill_rect(lx + 4, ly + 1, 1, 2, true);
+            d.fill_rect(lx + 2, ly + 4, 1, 1, true);
+        }
+    }
+
     // Cursor: a small tick on the top edge and a dot under the floor line —
     // nothing covering the note rows themselves. This column is ALSO the
     // playback/playhead column (see below), so there is a single unified
@@ -536,9 +558,18 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         ed.prev_notes[std::min<std::size_t>(ed.cur, kStepCountMax - 1)];
     const bool pitch_pending = is_on && orig >= 0 &&
                                static_cast<int>(s.notes[0]) != orig;
-    if (note_focused) {
+    if (note_focused && ed.edit_note) {
+        // Focused AND unlocked: solid highlight (up/down edits the pitch).
         d.fill_rect(note_x, dy - 9, 34, kRowH, true);
         d.draw_text_px(note_buf, note_pad_x, dy - 8, false);
+    } else if (note_focused) {
+        // Focused but LOCKED: an outline box, so it reads as the active field
+        // that up/down will NOT change until Shift+Rec unlocks it.
+        d.fill_rect(note_x, dy - 9, 34, 1, true);
+        d.fill_rect(note_x, dy - 2, 34, 1, true);
+        d.fill_rect(note_x, dy - 9, 1, kRowH, true);
+        d.fill_rect(note_x + 33, dy - 9, 1, kRowH, true);
+        d.draw_text(note_buf, note_pad_x, dy - 8);
     } else {
         d.draw_text(note_buf, note_pad_x, dy - 8);
     }

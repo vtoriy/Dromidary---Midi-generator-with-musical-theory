@@ -248,27 +248,36 @@ void AppLoop::process_functional(uint32_t raw, uint32_t now_ms) {
     }
 
     if (fn_edge(kBtnRec)) {
-        runtime.recording = !runtime.recording;
-        // Recording arms the silent pattern grid so that whatever the player
-        // hears is quantised into the active slot: KB/Filter keys, RandomNote
-        // output (and PTRN live playback all record while Rec is held up).
-        if (!runtime.test_mode) {
-            if (runtime.screen_mode == ScreenMode::Edit) {
-                // In the editor Rec ONLY arms step entry — it must not start
-                // the slot transport, otherwise the playhead runs away instead
-                // of letting the user place notes one step at a time.
-                mode_.capture_transport_stop();
-            } else if (runtime.recording &&
-                       (runtime.mode == PlayMode::Pattern ||
-                        runtime.mode == PlayMode::RandomNote ||
-                        runtime.mode == PlayMode::MidiKeyboard ||
-                        runtime.mode == PlayMode::MidiFilter)) {
-                mode_.capture_transport_start(now_ms);
-            } else {
-                mode_.capture_transport_stop();
+        if (state_.runtime.screen_mode == ScreenMode::Edit &&
+            fn_pressed(kBtnShift)) {
+            // Shift+Rec in the editor toggles joystick note-pitch editing.
+            // Locked by default so an accidental up/down never touches notes;
+            // pad keys keep assigning pitches either way. Showed as a padlock.
+            state_.editor.edit_note = !state_.editor.edit_note;
+            ui_dirty_ = true;
+        } else {
+            runtime.recording = !runtime.recording;
+            // Recording arms the silent pattern grid so that whatever the player
+            // hears is quantised into the active slot: KB/Filter keys, RandomNote
+            // output (and PTRN live playback all record while Rec is held up).
+            if (!runtime.test_mode) {
+                if (runtime.screen_mode == ScreenMode::Edit) {
+                    // In the editor Rec ONLY arms step entry — it must not start
+                    // the slot transport, otherwise the playhead runs away instead
+                    // of letting the user place notes one step at a time.
+                    mode_.capture_transport_stop();
+                } else if (runtime.recording &&
+                           (runtime.mode == PlayMode::Pattern ||
+                            runtime.mode == PlayMode::RandomNote ||
+                            runtime.mode == PlayMode::MidiKeyboard ||
+                            runtime.mode == PlayMode::MidiFilter)) {
+                    mode_.capture_transport_start(now_ms);
+                } else {
+                    mode_.capture_transport_stop();
+                }
             }
+            ui_dirty_ = true;
         }
-        ui_dirty_ = true;
     }
 
     if (fn_edge(kBtnRest)) {
@@ -824,6 +833,10 @@ void AppLoop::editor_tilt(Direction dir, bool shift) {
     const int delta = (dir == Direction::Up) ? 1 : -1;
     switch (ed.field) {
         case 0: {  // NOTE: chromatic pitch, Shift = octave ±12
+            if (!ed.edit_note) {
+                break;  // locked (default): up/down never touches notes; use
+                        // note keys, or Shift+Rec to unlock joystick pitch edit
+            }
             const int base = s.active && s.note_count > 0 ? s.notes[0]
                                                           : static_cast<int>(60);
             const uint8_t cidx = std::min<uint8_t>(ed.cur, kStepCountMax - 1);

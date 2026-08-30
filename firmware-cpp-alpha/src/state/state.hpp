@@ -55,6 +55,7 @@ struct PtnEditorUI {
     uint8_t field {0};     // focused value: 0=NOTE 1=LEN 2=ON 3=PLEN(pattern len)
     int16_t prev_note {-1}; // original note of the selected step (undo); -1 = none
     std::array<int16_t, kStepCountMax> prev_notes {}; // per-step original note
+    bool edit_note {false}; // joystick pitch editing unlocked (Shift+Rec in EDIT)
 
     // --- Range selection (universal mechanism, Phase 1) ---------------------
     // A selection is an inclusive step range [aLo..bHi] that stays visible
