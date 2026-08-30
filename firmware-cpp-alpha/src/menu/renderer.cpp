@@ -451,28 +451,6 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
         d.fill_rect(c * col_w + 2, y - 1, 3, 3, true);
     }
 
-    // Padlock: joystick note-pitch editing is LOCKED by default so up/down
-    // never touches notes (assign via the note keys); Shift+Rec in the editor
-    // toggles it. Closed padlock = locked, open = unlocked (up/down edits
-    // pitch). Drawn in the idle top strip, clear of the roll and detail line.
-    {
-        const int lx = 2, ly = 1;
-        // body
-        d.fill_rect(lx, ly + 3, 5, 3, true);
-        // shackle: open leaves a visible gap (no keyhole); closed links over
-        // the body and adds a keyhole.
-        if (ed.edit_note) {
-            d.fill_rect(lx + 1, ly, 3, 1, true);
-            d.fill_rect(lx, ly + 1, 1, 1, true);
-            d.fill_rect(lx + 4, ly + 1, 1, 1, true);
-        } else {
-            d.fill_rect(lx + 1, ly, 3, 1, true);
-            d.fill_rect(lx, ly + 1, 1, 2, true);
-            d.fill_rect(lx + 4, ly + 1, 1, 2, true);
-            d.fill_rect(lx + 2, ly + 4, 1, 1, true);
-        }
-    }
-
     // Cursor: a small tick on the top edge and a dot under the floor line —
     // nothing covering the note rows themselves. This column is ALSO the
     // playback/playhead column (see below), so there is a single unified
@@ -580,6 +558,32 @@ void draw_pattern_editor(const AppState& state, DisplaySh1106& d) {
                             DisplaySh1106::kTextAdvance, dy - 8);
         } else {
             d.draw_text("-", note_x, dy - 8);
+        }
+    }
+
+    // Lock marker in the NOTE field: a small padlock to the right of the note
+    // name (clear of the name, which ends at x<=48, and the "+"/"-" signs).
+    // Closed = joystick pitch editing is locked (Shift+Rec to unlock), so the
+    // slot shows exactly where the note is edited and whether up/down acts.
+    {
+        // The field box is bright-filled only when focused AND unlocked, so the
+        // lock flips to a dark glyph there (readable on the bright box).
+        const bool on_bright = (note_focused && ed.edit_note);
+        const bool c = on_bright ? false : true;
+        const int lx = note_x + 29;
+        const int by = dy - 6;
+        d.fill_rect(lx, by, 4, 3, c);  // body
+        if (ed.edit_note) {
+            // open: shackle legs leave a gap, no keyhole
+            d.fill_rect(lx + 1, by - 2, 2, 1, c);
+            d.fill_rect(lx, by - 1, 1, 1, c);
+            d.fill_rect(lx + 3, by - 1, 1, 1, c);
+        } else {
+            // closed: legs link onto the body, keyhole present
+            d.fill_rect(lx + 1, by - 2, 2, 1, c);
+            d.fill_rect(lx, by - 1, 1, 2, c);
+            d.fill_rect(lx + 3, by - 1, 1, 2, c);
+            d.fill_rect(lx + 2, by + 1, 1, 1, c);
         }
     }
 
